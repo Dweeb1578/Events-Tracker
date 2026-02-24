@@ -1,0 +1,138 @@
+# Companies to monitor for events
+# Grouped by category - add/remove companies and URLs as needed
+# linkedin_url: company's LinkedIn posts page (for Apify scraping)
+
+billing:
+  - name: Tabs
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/teamtabs/
+  - name: Sequence
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/sequence-hq/
+  - name: Lunos
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/lunos-ai/
+  - name: Recurly
+    event_urls:
+      - https://recurly.com/events/
+    linkedin_url: https://www.linkedin.com/company/recurly/
+  - name: Metronome
+    event_urls:
+      - https://metronome.com/events
+    linkedin_url: https://www.linkedin.com/company/getmetronome/
+  - name: Orb
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/orbhq/
+  - name: Maxio
+    event_urls:
+      - https://www.maxio.com/events
+    linkedin_url: https://www.linkedin.com/company/wearemaxio/
+  - name: Zuora
+    event_urls:
+      - https://www.zuora.com/events/
+    linkedin_url: https://www.linkedin.com/company/zuora/
+  - name: Ordway
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/ordway/
+
+revrec:
+  - name: RightRev
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/rightrev/
+  - name: Stripe
+    event_urls:
+      - https://stripe.com/events
+    linkedin_url: https://www.linkedin.com/company/stripe/
+  - name: Chargebee
+    event_urls:
+      - https://www.chargebee.com/events/
+    linkedin_url: https://www.linkedin.com/company/chargebee/
+
+accounts_receivable:
+  - name: Numeric
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/numeric-io/
+  - name: Everest
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/everest-systems-inc/
+  - name: Light
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/uselightinc/
+
+erp:
+  - name: Rillet
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/team-rillet/
+  - name: Dualentry
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/dualentry/
+  - name: Campfire
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/meetcampfire/
+  - name: Doss
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/doss-com/
+
+accounts_payable:
+  - name: Brex
+    event_urls:
+      - https://www.brex.com/events
+    linkedin_url: https://www.linkedin.com/company/brexhq/
+  - name: Spendesk
+    event_urls:
+      - https://www.spendesk.com/events/
+    linkedin_url: https://www.linkedin.com/company/spendesk/
+  - name: Ramp
+    event_urls:
+      - https://ramp.com/events
+    linkedin_url: https://www.linkedin.com/company/ramp/
+  - name: Airbase
+    event_urls:
+      - https://www.airbase.com/events
+    linkedin_url: https://www.linkedin.com/company/airbaseinc/
+
+fpa:
+  - name: Aleph
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/getaleph/
+  - name: Planful
+    event_urls:
+      - https://planful.com/events/
+    linkedin_url: https://www.linkedin.com/company/planful-inc/
+  - name: Runway
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/runwayml/
+  - name: Vena
+    event_urls:
+      - https://www.venasolutions.com/events
+    linkedin_url: https://www.linkedin.com/company/vena-solutions/
+
+forecasting:
+  - name: Jedox
+    event_urls:
+      - https://www.jedox.com/en/events/
+    linkedin_url: https://www.linkedin.com/company/jedox/
+  - name: Fuel
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/fuelfinance/
+  - name: Digits
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/digits-financial/
+
+tax:
+  - name: Kintsugi
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/kintsugi-ai/
+  - name: Anrok
+    event_urls:
+      - https://www.anrok.com/events
+    linkedin_url: https://www.linkedin.com/company/anrok/
+  - name: Taxwire
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/taxwire/
+  - name: Numeral
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/numeralhq/
+  - name: Sphere
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/getsphere/
