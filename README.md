@@ -1,4 +1,4 @@
-# Zenskar Event Detection System
+# Event Detection System
 
 A multi-agent AI pipeline designed to automatically monitor competitor and industry companies to detect upcoming events they are organizing or attending.
 
