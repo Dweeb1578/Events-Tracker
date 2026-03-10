@@ -1,0 +1,592 @@
+"""
+Google Sheets Writer
+Writes classified events to a Google Sheet with rich formatting.
+- Removes rows for past events on each run
+- Appends all new events WITHOUT deduplication
+- Applies header colors, alternating rows, score badges, event-type colors,
+  column widths, frozen header, auto-filter, and hyperlinked registration URLs
+"""
+
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+
+import gspread
+from google.oauth2.service_account import Credentials
+
+logger = logging.getLogger(__name__)
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+EVENT_HEADERS = [
+    "Event Name",       # A  0
+    "Host Company",     # B  1
+    "Category",         # C  2
+    "Event Type",       # D  3
+    "Date",             # E  4
+    "Location",         # F  5
+    "Target Audience",  # G  6
+    "Registration URL", # H  7
+    "Description",      # I  8
+    "Relevance Score",  # J  9
+    "Source URL",       # K  10
+    "Detected At",      # L  11
+    "Status",           # M  12
+]
+
+NUM_COLS = len(EVENT_HEADERS)
+DATE_COL     = EVENT_HEADERS.index("Date")
+SCORE_COL    = EVENT_HEADERS.index("Relevance Score")
+TYPE_COL     = EVENT_HEADERS.index("Event Type")
+REG_URL_COL  = EVENT_HEADERS.index("Registration URL")
+
+# Column widths in pixels
+COLUMN_WIDTHS = [270, 145, 110, 125, 105, 175, 200, 175, 275, 85, 175, 145, 105]
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+HEADER_BG  = "1F4E79"   # deep navy
+HEADER_FG  = "FFFFFF"
+BORDER_CLR = "C8D0DA"   # soft gray border
+ROW_ALT_BG = "EDF3FB"   # very light steel-blue (even rows)
+
+SCORE_HIGH = dict(bg="C6EFCE", fg="1E6B22")  # green  ≥ 8
+SCORE_MED  = dict(bg="FFEB9C", fg="7D5700")  # amber  5–7
+SCORE_LOW  = dict(bg="FFC7CE", fg="9C0006")  # red    ≤ 4
+
+EVENT_TYPE_PALETTE = {
+    "summit":     ("4472C4", "FFFFFF"),
+    "conference": ("4472C4", "FFFFFF"),
+    "dinner":     ("C0504D", "FFFFFF"),
+    "roundtable": ("E36C09", "FFFFFF"),
+    "meetup":     ("4BACC6", "FFFFFF"),
+    "networking": ("4BACC6", "FFFFFF"),
+    "workshop":   ("F79646", "FFFFFF"),
+    "happy hour": ("70AD47", "FFFFFF"),
+    "forum":      ("7030A0", "FFFFFF"),
+    "panel":      ("5B9BD5", "FFFFFF"),
+    "other":      ("808080", "FFFFFF"),
+}
+
+
+# ── Sheets API helpers ────────────────────────────────────────────────────────
+
+def _rgb(hex_color: str) -> dict:
+    """Hex string → Sheets API color dict (0–1 float scale)."""
+    h = hex_color.lstrip("#")
+    return {
+        "red":   int(h[0:2], 16) / 255,
+        "green": int(h[2:4], 16) / 255,
+        "blue":  int(h[4:6], 16) / 255,
+    }
+
+
+def _repeat_cell(sheet_id: int, r1: int, r2: int, c1: int, c2: int,
+                 fmt: dict, fields: str) -> dict:
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": r1, "endRowIndex": r2,
+                "startColumnIndex": c1, "endColumnIndex": c2,
+            },
+            "cell": {"userEnteredFormat": fmt},
+            "fields": f"userEnteredFormat({fields})",
+        }
+    }
+
+
+def _col_width(sheet_id: int, col: int, px: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                      "startIndex": col, "endIndex": col + 1},
+            "properties": {"pixelSize": px},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def _row_height(sheet_id: int, r1: int, r2: int, px: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "ROWS",
+                      "startIndex": r1, "endIndex": r2},
+            "properties": {"pixelSize": px},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def _cond_rule(sheet_id: int, r1: int, c1: int, c2: int,
+               condition: dict, bg: str, fg: str, index: int) -> dict:
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": [{
+                    "sheetId": sheet_id,
+                    "startRowIndex": r1,
+                    "startColumnIndex": c1,
+                    "endColumnIndex": c2,
+                }],
+                "booleanRule": {
+                    "condition": condition,
+                    "format": {
+                        "backgroundColor": _rgb(bg),
+                        "textFormat": {"foregroundColor": _rgb(fg), "bold": True},
+                    },
+                },
+            },
+            "index": index,
+        }
+    }
+
+
+def _get_cond_format_count(spreadsheet: gspread.Spreadsheet, sheet_id: int) -> int:
+    """Return the number of existing conditional format rules for this sheet."""
+    try:
+        resp = spreadsheet.client.request(
+            "GET",
+            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet.id}",
+            params={"fields": "sheets(properties/sheetId,conditionalFormats)"},
+        )
+        for sheet in resp.json().get("sheets", []):
+            if sheet.get("properties", {}).get("sheetId") == sheet_id:
+                return len(sheet.get("conditionalFormats", []))
+    except Exception:
+        pass
+    return 0
+
+
+# ── Core formatting ───────────────────────────────────────────────────────────
+
+def _apply_formatting(spreadsheet: gspread.Spreadsheet,
+                      ws: gspread.Worksheet,
+                      total_rows: int) -> None:
+    """
+    Apply full sheet formatting via a single Sheets API batchUpdate call.
+    total_rows = number of data rows (excluding header).
+    """
+    sid = ws.id
+    end_row = 1 + total_rows  # 0-based exclusive end (header + data)
+    reqs = []
+
+    # ── 1. Column widths ──────────────────────────────────────────────────────
+    for col, px in enumerate(COLUMN_WIDTHS[:NUM_COLS]):
+        reqs.append(_col_width(sid, col, px))
+
+    # ── 2. Row heights ────────────────────────────────────────────────────────
+    reqs.append(_row_height(sid, 0, 1, 44))                  # header
+    if total_rows > 0:
+        reqs.append(_row_height(sid, 1, end_row, 80))        # data rows
+
+    # ── 3. Header style ───────────────────────────────────────────────────────
+    reqs.append(_repeat_cell(
+        sid, 0, 1, 0, NUM_COLS,
+        {
+            "backgroundColor": _rgb(HEADER_BG),
+            "textFormat": {
+                "bold": True, "fontSize": 11,
+                "foregroundColor": _rgb(HEADER_FG),
+            },
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        },
+        "backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy",
+    ))
+
+    # ── 4. Freeze header + auto-filter ────────────────────────────────────────
+    reqs.append({
+        "updateSheetProperties": {
+            "properties": {
+                "sheetId": sid,
+                "gridProperties": {"frozenRowCount": 1},
+            },
+            "fields": "gridProperties.frozenRowCount",
+        }
+    })
+    reqs.append({
+        "setBasicFilter": {
+            "filter": {
+                "range": {
+                    "sheetId": sid,
+                    "startRowIndex": 0, "endRowIndex": max(end_row, 2),
+                    "startColumnIndex": 0, "endColumnIndex": NUM_COLS,
+                }
+            }
+        }
+    })
+
+    if total_rows > 0:
+        # ── 5. Base data cell style ───────────────────────────────────────────
+        thin = {"style": "SOLID", "width": 1, "color": _rgb(BORDER_CLR)}
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, 0, NUM_COLS,
+            {
+                "textFormat": {"fontSize": 10},
+                "verticalAlignment": "TOP",
+                "wrapStrategy": "WRAP",
+                "borders": {"top": thin, "bottom": thin, "left": thin, "right": thin},
+            },
+            "textFormat,verticalAlignment,wrapStrategy,borders",
+        ))
+
+        # ── 6. White base background for all data rows ────────────────────────
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, 0, NUM_COLS,
+            {"backgroundColor": _rgb("FFFFFF")},
+            "backgroundColor",
+        ))
+
+        # ── 7. Column-specific alignment ──────────────────────────────────────
+        for col in (DATE_COL, SCORE_COL, EVENT_HEADERS.index("Category"),
+                    EVENT_HEADERS.index("Status")):
+            reqs.append(_repeat_cell(
+                sid, 1, end_row, col, col + 1,
+                {"horizontalAlignment": "CENTER"},
+                "horizontalAlignment",
+            ))
+
+        # ── 8. Event Name: bold ───────────────────────────────────────────────
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, 0, 1,
+            {"textFormat": {"bold": True, "fontSize": 10}},
+            "textFormat",
+        ))
+
+        # ── 9. Relevance Score: bold + centered ───────────────────────────────
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, SCORE_COL, SCORE_COL + 1,
+            {"textFormat": {"bold": True, "fontSize": 11},
+             "horizontalAlignment": "CENTER"},
+            "textFormat,horizontalAlignment",
+        ))
+
+    # ── 10. Clear existing conditional format rules ───────────────────────────
+    n_existing = _get_cond_format_count(spreadsheet, sid)
+    for i in range(n_existing - 1, -1, -1):
+        reqs.append({"deleteConditionalFormatRule": {"sheetId": sid, "index": i}})
+
+    if total_rows > 0:
+        # ── 11. Alternating row colors (conditional format) ───────────────────
+        # Even rows (2, 4, 6…) get the light blue tint
+        reqs.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sid,
+                        "startRowIndex": 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": NUM_COLS,
+                    }],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "CUSTOM_FORMULA",
+                            "values": [{"userEnteredValue": "=ISEVEN(ROW())"}],
+                        },
+                        "format": {"backgroundColor": _rgb(ROW_ALT_BG)},
+                    },
+                },
+                "index": 0,
+            }
+        })
+
+        # ── 12. Relevance score color badges (whole row) ──────────────────────
+        score_letter = chr(ord("A") + SCORE_COL)   # e.g. "J"
+        for rule_idx, (formula, colors) in enumerate([
+            (f"=${score_letter}2>=8", SCORE_HIGH),
+            (f"=${score_letter}2>=5", SCORE_MED),
+            (f"=${score_letter}2<5",  SCORE_LOW),
+        ], start=1):
+            reqs.append(_cond_rule(
+                sid, 1, SCORE_COL, SCORE_COL + 1,
+                {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": formula}]},
+                colors["bg"], colors["fg"], rule_idx,
+            ))
+
+        # ── 13. Event type color badges ───────────────────────────────────────
+        for rule_offset, (etype, (bg, fg)) in enumerate(EVENT_TYPE_PALETTE.items(), start=4):
+            reqs.append(_cond_rule(
+                sid, 1, TYPE_COL, TYPE_COL + 1,
+                {
+                    "type": "TEXT_CONTAINS",
+                    "values": [{"userEnteredValue": etype.title()}],
+                },
+                bg, fg, rule_offset,
+            ))
+
+    spreadsheet.batch_update({"requests": reqs})
+
+
+# ── Auth & worksheet helpers ──────────────────────────────────────────────────
+
+def _get_client() -> gspread.Client:
+    creds_file = os.getenv("GOOGLE_CREDENTIALS_FILE")
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+    if creds_file and os.path.exists(creds_file):
+        creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
+    elif creds_json:
+        creds = Credentials.from_service_account_info(json.loads(creds_json), scopes=SCOPES)
+    else:
+        raise ValueError(
+            "Google credentials not found. "
+            "Set GOOGLE_CREDENTIALS_FILE or GOOGLE_CREDENTIALS_JSON env var."
+        )
+    return gspread.authorize(creds)
+
+
+def _get_or_create_worksheet(spreadsheet: gspread.Spreadsheet,
+                              name: str) -> gspread.Worksheet:
+    try:
+        return spreadsheet.worksheet(name)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=name, rows=2000, cols=NUM_COLS)
+        ws.append_row(EVENT_HEADERS)
+        return ws
+
+
+def _is_past_event(date_str: str) -> bool:
+    today = datetime.now(timezone.utc).date()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).date() < today
+        except ValueError:
+            continue
+    return False
+
+
+def _remove_past_events(ws: gspread.Worksheet) -> int:
+    all_values = ws.get_all_values()
+    if len(all_values) <= 1:
+        return 0
+
+    headers = all_values[0]
+    date_col = headers.index("Date") if "Date" in headers else DATE_COL
+
+    to_delete = [
+        idx + 2
+        for idx, row in enumerate(all_values[1:])
+        if len(row) > date_col
+        and (row[date_col] or "").strip()
+        and _is_past_event(row[date_col])
+    ]
+    for row_idx in reversed(to_delete):
+        ws.delete_rows(row_idx)
+    return len(to_delete)
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def write_events_to_sheet(
+    events: list[dict],
+    sheet_id: str,
+    worksheet_name: str = "Classified Events",
+    dry_run: bool = False,
+) -> int:
+    """
+    Write events to a Google Sheet worksheet with rich formatting.
+
+    - Past events in the sheet are deleted first.
+    - All provided events are appended without deduplication.
+    - Sheet formatting (colors, widths, badges) is re-applied after each write.
+
+    Returns the number of events appended.
+    """
+    client = _get_client()
+    spreadsheet = client.open_by_key(sheet_id)
+    ws = _get_or_create_worksheet(spreadsheet, worksheet_name)
+
+    # ── Remove past events ────────────────────────────────────────────────────
+    if not dry_run:
+        removed = _remove_past_events(ws)
+        if removed:
+            print(f"[Sheets] Removed {removed} past events from '{worksheet_name}'")
+    else:
+        print(f"[Sheets][DryRun] Would remove past events from '{worksheet_name}'")
+
+    if not events:
+        # Still re-apply formatting so the header looks clean even with no data
+        if not dry_run:
+            existing_rows = max(0, len(ws.get_all_values()) - 1)
+            _apply_formatting(spreadsheet, ws, existing_rows)
+        return 0
+
+    if dry_run:
+        for event in events:
+            print(
+                f"  [Sheets][DryRun] Would add: "
+                f"{event.get('event_name')} | {event.get('location', '?')} | "
+                f"relevance:{event.get('relevance_score', '?')}"
+            )
+        return len(events)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    is_linkedin = "linkedin" in worksheet_name.lower()
+    status_label = "New (LinkedIn)" if is_linkedin else "New"
+
+    rows = []
+    for event in events:
+        reg_url = event.get("registration_url", "")
+        # Use HYPERLINK formula so the URL is clickable with a clean label
+        reg_cell = (
+            f'=HYPERLINK("{reg_url}", "Register →")' if reg_url and reg_url.startswith("http")
+            else reg_url
+        )
+        rows.append([
+            event.get("event_name", ""),
+            event.get("host_company", ""),
+            event.get("source_category", ""),
+            event.get("event_type", ""),
+            event.get("date", ""),
+            event.get("location", ""),
+            event.get("target_audience", ""),
+            reg_cell,
+            event.get("description", ""),
+            event.get("relevance_score", 0),
+            event.get("source_url", ""),
+            now,
+            status_label,
+        ])
+
+    ws.append_rows(rows, value_input_option="USER_ENTERED")
+    print(f"[Sheets] Appended {len(rows)} events to '{worksheet_name}'")
+
+    # ── Apply formatting ──────────────────────────────────────────────────────
+    total_data_rows = len(ws.get_all_values()) - 1  # re-read after append
+    print(f"[Sheets] Applying formatting ({total_data_rows} data rows)...")
+    _apply_formatting(spreadsheet, ws, total_data_rows)
+    print(f"[Sheets] Formatting applied to '{worksheet_name}'")
+
+    return len(rows)
+
+
+# ── Location-based sheets ─────────────────────────────────────────────────────
+
+# Sheets that should never be treated as location sheets
+_SYSTEM_SHEETS = {"Classified Events", "LinkedIn Events", "Scraped Data"}
+
+_SKIP_LOCATION_TERMS = {
+    "not specified", "unknown", "tbd", "n/a", "virtual", "online",
+    "location not", "to be determined", "venue tbd", "not disclosed",
+    "implied", "city not", "city unknown",
+}
+
+_CITY_ALIASES = {
+    "new york city": "New York",
+    "nyc": "New York",
+    "sf": "San Francisco",
+    "san francisco bay area": "San Francisco",
+}
+
+
+def _extract_city(location: str) -> str | None:
+    """
+    Extract a clean city name from a raw location string.
+    Returns None for virtual/unspecified locations.
+    """
+    if not location:
+        return None
+    loc = location.strip()
+    if any(term in loc.lower() for term in _SKIP_LOCATION_TERMS):
+        return None
+
+    # Take text before the first comma
+    city = loc.split(",")[0].strip()
+    # Strip parenthetical venue details e.g. "Berlin (AchtBerlin)"
+    city = re.sub(r"\s*\(.*?\)", "", city).strip()
+    # Normalize known aliases
+    city_lower = city.lower()
+    city = _CITY_ALIASES.get(city_lower, city)
+    # Sheet names can't be empty or >100 chars
+    city = city[:50].strip()
+    return city if city else None
+
+
+def write_events_by_location(
+    events: list[dict],
+    sheet_id: str,
+    dry_run: bool = False,
+) -> None:
+    """
+    Write a separate worksheet tab per city, containing only that city's events.
+
+    - Old location tabs that no longer have events are deleted.
+    - Each tab is fully cleared and rewritten on every run (no past-event logic
+      needed since the data is always rebuilt from scratch).
+    - Same rich formatting as the main Classified Events sheet.
+    """
+    # Group events by city
+    city_events: dict[str, list[dict]] = {}
+    for event in events:
+        city = _extract_city(event.get("location", ""))
+        if city:
+            city_events.setdefault(city, []).append(event)
+
+    if not city_events:
+        print("[Sheets] No events with known locations — skipping location sheets")
+        return
+
+    if dry_run:
+        for city, evts in sorted(city_events.items()):
+            print(f"  [Sheets][DryRun] Would create sheet '{city}' with {len(evts)} events")
+        return
+
+    client = _get_client()
+    spreadsheet = client.open_by_key(sheet_id)
+    existing = {ws.title: ws for ws in spreadsheet.worksheets()}
+
+    # ── Delete stale location sheets ──────────────────────────────────────────
+    for name, ws in existing.items():
+        if name not in _SYSTEM_SHEETS and name not in city_events:
+            spreadsheet.del_worksheet(ws)
+            print(f"[Sheets] Deleted stale location sheet '{name}'")
+
+    # ── Write each city ───────────────────────────────────────────────────────
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    for city, city_event_list in sorted(city_events.items()):
+        # Refresh existing map (may have changed after deletions)
+        existing = {ws.title: ws for ws in spreadsheet.worksheets()}
+
+        if city in existing:
+            ws = existing[city]
+            ws.clear()
+            ws.append_row(EVENT_HEADERS)
+        else:
+            ws = spreadsheet.add_worksheet(title=city, rows=500, cols=NUM_COLS)
+            ws.append_row(EVENT_HEADERS)
+
+        rows = []
+        for event in city_event_list:
+            reg_url = event.get("registration_url", "")
+            reg_cell = (
+                f'=HYPERLINK("{reg_url}", "Register →")' if reg_url and reg_url.startswith("http")
+                else reg_url
+            )
+            is_linkedin = "linkedin" in (event.get("status", "")).lower() or \
+                          "linkedin" in (event.get("source_url", "")).lower()
+            rows.append([
+                event.get("event_name", ""),
+                event.get("host_company", ""),
+                event.get("source_category", ""),
+                event.get("event_type", ""),
+                event.get("date", ""),
+                event.get("location", ""),
+                event.get("target_audience", ""),
+                reg_cell,
+                event.get("description", ""),
+                event.get("relevance_score", 0),
+                event.get("source_url", ""),
+                now,
+                "New (LinkedIn)" if is_linkedin else "New",
+            ])
+
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
+        _apply_formatting(spreadsheet, ws, len(rows))
+        print(f"[Sheets] '{city}': {len(rows)} event(s) written")

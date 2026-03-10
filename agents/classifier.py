@@ -24,7 +24,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _client: Optional[Groq] = None
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 # ── Keyword pre-filter ──
 # Pages must contain at least one of these to be sent to the LLM

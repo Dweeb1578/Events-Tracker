@@ -33,19 +33,13 @@ def generate_search_urls(company_name: str) -> list[dict]:
     encoded = quote_plus(company_name)
     urls = []
 
-    # Luma search
+    # Luma search — searches for events the company is hosting/sponsoring
     urls.append({
         "url": f"https://lu.ma/search?q={encoded}",
         "source_type": "luma_search",
     })
 
-    # Eventbrite search (public page, no API key needed)
-    urls.append({
-        "url": f"https://www.eventbrite.com/d/online/{encoded}-finance/",
-        "source_type": "eventbrite_search",
-    })
-
-    # Google search for events (fallback)
+    # Google search for events (fallback, disabled by default via --include-google)
     urls.append({
         "url": f"https://www.google.com/search?q={encoded}+finance+event+summit+2025+2026",
         "source_type": "google_search",

@@ -199,7 +199,6 @@ def write_events(events: list[dict], output_path: str = DEFAULT_OUTPUT, dry_run:
     sheet_name = "Classified Events"
     if sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        existing = _get_existing_keys(ws, 0, 1, 4)  # event_name, host_company, date
     else:
         ws = wb.create_sheet(sheet_name, 0)  # Insert as first sheet
         _format_sheet(ws, EVENT_COLUMNS, HEADER_FILL)
@@ -210,22 +209,11 @@ def write_events(events: list[dict], output_path: str = DEFAULT_OUTPUT, dry_run:
             "Description": 50, "Relevance Score": 10, "Source URL": 40,
             "Detected At": 20, "Status": 12,
         }, EVENT_COLUMNS)
-        existing = set()
 
     new_count = 0
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     for event in events:
-        key = (
-            str(event.get("event_name", "")).strip().lower(),
-            str(event.get("host_company", "")).strip().lower(),
-            str(event.get("date", "")).strip().lower(),
-        )
-
-        if key in existing:
-            print(f"  [Dedup] Skipping duplicate: {event.get('event_name')}")
-            continue
-
         if dry_run:
             print(f"  [DryRun] Would add: {event.get('event_name')} by {event.get('host_company')}")
             new_count += 1
@@ -265,7 +253,6 @@ def write_events(events: list[dict], output_path: str = DEFAULT_OUTPUT, dry_run:
             cell.hyperlink = reg_url
             cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
 
-        existing.add(key)
         new_count += 1
 
     if not dry_run and new_count > 0:
@@ -299,7 +286,6 @@ def write_linkedin_events(events: list[dict], output_path: str = DEFAULT_OUTPUT,
     sheet_name = "LinkedIn Events"
     if sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        existing = _get_existing_keys(ws, 0, 1, 4)
     else:
         ws = wb.create_sheet(sheet_name)
         _format_sheet(ws, EVENT_COLUMNS, LINKEDIN_HEADER_FILL)
@@ -310,22 +296,11 @@ def write_linkedin_events(events: list[dict], output_path: str = DEFAULT_OUTPUT,
             "Description": 50, "Relevance Score": 10, "Source URL": 40,
             "Detected At": 20, "Status": 12,
         }, EVENT_COLUMNS)
-        existing = set()
 
     new_count = 0
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     for event in events:
-        key = (
-            str(event.get("event_name", "")).strip().lower(),
-            str(event.get("host_company", "")).strip().lower(),
-            str(event.get("date", "")).strip().lower(),
-        )
-
-        if key in existing:
-            print(f"  [Dedup] Skipping LinkedIn duplicate: {event.get('event_name')}")
-            continue
-
         if dry_run:
             print(f"  [DryRun] Would add LinkedIn event: {event.get('event_name')} by {event.get('host_company')}")
             new_count += 1
@@ -364,7 +339,6 @@ def write_linkedin_events(events: list[dict], output_path: str = DEFAULT_OUTPUT,
             cell.hyperlink = reg_url
             cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
 
-        existing.add(key)
         new_count += 1
 
     if not dry_run and new_count > 0:

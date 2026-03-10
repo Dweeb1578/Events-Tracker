@@ -11,7 +11,14 @@ Usage:
 
 import argparse
 import logging
+import sys
 import time
+
+# Force UTF-8 output on Windows to handle emoji in print statements
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
 
 import schedule
 
@@ -81,6 +88,24 @@ def main():
         action="store_true",
         help="Skip LinkedIn post scraping via Apify (useful if no APIFY_API_TOKEN set)",
     )
+    parser.add_argument(
+        "--location",
+        action="append",
+        dest="locations",
+        metavar="LOCATION",
+        help=(
+            "Only include events in this location (substring match, case-insensitive). "
+            "Can be specified multiple times, e.g. --location 'San Francisco' --location 'New York'"
+        ),
+    )
+    parser.add_argument(
+        "--sheet-id",
+        default=None,
+        help=(
+            "Google Spreadsheet ID to write events to. "
+            "Falls back to GOOGLE_SHEET_ID env var if not set."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -99,6 +124,8 @@ def main():
             min_relevance=args.min_relevance,
             use_cache=args.use_cache,
             skip_linkedin=args.skip_linkedin,
+            locations=args.locations or [],
+            sheet_id=args.sheet_id,
         )
 
     if args.schedule:
