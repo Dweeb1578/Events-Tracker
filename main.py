@@ -89,6 +89,11 @@ def main():
         help="Skip LinkedIn post scraping via Apify (useful if no APIFY_API_TOKEN set)",
     )
     parser.add_argument(
+        "--skip-luma",
+        action="store_true",
+        help="Skip Luma discover page scraping",
+    )
+    parser.add_argument(
         "--location",
         action="append",
         dest="locations",
@@ -124,6 +129,7 @@ def main():
             min_relevance=args.min_relevance,
             use_cache=args.use_cache,
             skip_linkedin=args.skip_linkedin,
+            skip_luma=args.skip_luma,
             locations=args.locations or [],
             sheet_id=args.sheet_id,
         )

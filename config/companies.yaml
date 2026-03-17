@@ -40,8 +40,7 @@ revrec:
     event_urls: []
     linkedin_url: https://www.linkedin.com/company/rightrev/
   - name: Stripe
-    event_urls:
-      - https://stripe.com/events
+    event_urls: []  # stripe.com/events → stripe.events/ (403, blocks scrapers)
     linkedin_url: https://www.linkedin.com/company/stripe/
   - name: Chargebee
     event_urls:
@@ -103,8 +102,7 @@ fpa:
     event_urls: []
     linkedin_url: https://www.linkedin.com/company/runwayml/
   - name: Vena
-    event_urls:
-      - https://www.venasolutions.com/events
+    event_urls: []  # venasolutions.com/events returns 404
     linkedin_url: https://www.linkedin.com/company/vena-solutions/
 
 forecasting:
@@ -124,8 +122,7 @@ tax:
     event_urls: []
     linkedin_url: https://www.linkedin.com/company/kintsugi-ai/
   - name: Anrok
-    event_urls:
-      - https://www.anrok.com/events
+    event_urls: []  # anrok.com/events returns 404
     linkedin_url: https://www.linkedin.com/company/anrok/
   - name: Taxwire
     event_urls: []

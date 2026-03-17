@@ -15,7 +15,9 @@ Setup:
 
 import os
 import logging
+import re
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -33,6 +35,68 @@ ACTOR_ID = "harvestapi~linkedin-company-posts"
 
 # How many recent posts to grab per company
 POSTS_PER_COMPANY = 5
+
+# Skip posts older than this many days
+MAX_POST_AGE_DAYS = 30
+
+
+def _parse_post_date(post: dict) -> datetime | None:
+    """
+    Extract and parse the post date from an Apify result.
+    Handles ISO timestamps, epoch ms, and relative strings like '3mo', '2w', '5d'.
+    Returns a timezone-aware datetime or None if unparsable.
+    """
+    # Try structured fields first
+    raw = None
+    content_attrs = post.get("contentAttributes", {})
+    if isinstance(content_attrs, dict):
+        raw = content_attrs.get("postedAt", "")
+    if not raw:
+        raw = post.get("postedAt", "") or post.get("publishedAt", "") or post.get("postedDate", "")
+    if not raw:
+        return None
+
+    # Epoch milliseconds (e.g. 1706000000000)
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(raw / 1000 if raw > 1e12 else raw, tz=timezone.utc)
+        except (OSError, ValueError):
+            return None
+
+    raw = str(raw).strip()
+
+    # ISO 8601 (e.g. "2026-01-15T10:30:00.000Z")
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+        except ValueError:
+            continue
+
+    # Relative strings from LinkedIn: "3mo", "2w", "5d", "12h", "1yr"
+    match = re.match(r"(\d+)\s*(yr|mo|w|d|h|m)", raw.lower())
+    if match:
+        amount, unit = int(match.group(1)), match.group(2)
+        now = datetime.now(timezone.utc)
+        delta_map = {"yr": 365, "mo": 30, "w": 7, "d": 1, "h": 0}
+        days = delta_map.get(unit, 0) * amount
+        if unit == "h":
+            return now - timedelta(hours=amount)
+        if unit == "m":
+            return now - timedelta(minutes=amount)
+        return now - timedelta(days=days)
+
+    return None
+
+
+def _is_post_too_old(post: dict, max_age_days: int = MAX_POST_AGE_DAYS) -> bool:
+    """Check if a post is older than max_age_days. Returns False if date is unparsable (keep it)."""
+    post_date = _parse_post_date(post)
+    if post_date is None:
+        return False  # Can't determine age — keep the post, let the classifier decide
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    return post_date < cutoff
 
 
 def _get_token() -> str:
@@ -65,34 +129,36 @@ def _run_actor_for_company(linkedin_url: str, max_posts: int = POSTS_PER_COMPANY
         "scrapeComments": False,
     }
 
+    headers = {"Authorization": f"Bearer {token}"}
+
     # Start the actor run (note: actor ID uses ~ not / in API URL)
-    url = f"{APIFY_API_BASE}/acts/{ACTOR_ID}/runs?token={token}"
-    resp = requests.post(url, json=actor_input, timeout=30)
+    url = f"{APIFY_API_BASE}/acts/{ACTOR_ID}/runs"
+    resp = requests.post(url, json=actor_input, headers=headers, timeout=30)
     resp.raise_for_status()
     run_data = resp.json()["data"]
     run_id = run_data["id"]
 
     # Poll for completion (max 2 minutes)
-    status_url = f"{APIFY_API_BASE}/actor-runs/{run_id}?token={token}"
+    status_url = f"{APIFY_API_BASE}/actor-runs/{run_id}"
     for _ in range(24):
         time.sleep(5)
-        status_resp = requests.get(status_url, timeout=15)
+        status_resp = requests.get(status_url, headers=headers, timeout=15)
         status_resp.raise_for_status()
         status = status_resp.json()["data"]["status"]
 
         if status == "SUCCEEDED":
             break
         elif status in ("FAILED", "ABORTED", "TIMED-OUT"):
-            logger.warning(f"[Apify] Run {status} for {username}")
+            logger.warning(f"[Apify] Run {status} for {company_url}")
             return []
     else:
-        logger.warning(f"[Apify] Timed out for {username}")
+        logger.warning(f"[Apify] Timed out for {company_url}")
         return []
 
     # Get results from the dataset
     dataset_id = status_resp.json()["data"]["defaultDatasetId"]
-    items_url = f"{APIFY_API_BASE}/datasets/{dataset_id}/items?token={token}"
-    items_resp = requests.get(items_url, timeout=30)
+    items_url = f"{APIFY_API_BASE}/datasets/{dataset_id}/items"
+    items_resp = requests.get(items_url, headers=headers, timeout=30)
     items_resp.raise_for_status()
 
     return items_resp.json()
@@ -176,34 +242,44 @@ def scrape_linkedin_posts(companies: list[dict], max_posts_per_company: int = PO
         posts = _extract_posts_from_result(raw_results)
 
         post_count = 0
+        skipped_old = 0
         for post in posts:
             # harvestapi actor uses 'content' for post text
             text = post.get("content", "") or post.get("text", "") or post.get("postText", "") or ""
             if not text or len(text.strip()) < 20:
                 continue
 
+            # Skip posts older than MAX_POST_AGE_DAYS
+            if _is_post_too_old(post):
+                skipped_old += 1
+                continue
+
             post_url = post.get("linkedinUrl", "") or post.get("url", "") or post.get("postUrl", "") or ""
 
-            # Get post date
-            posted_at = ""
-            content_attrs = post.get("contentAttributes", {})
-            if isinstance(content_attrs, dict):
-                posted_at = content_attrs.get("postedAt", "")
-            if not posted_at:
-                posted_at = post.get("postedAt", "") or post.get("publishedAt", "")
+            # Get post date (for classifier context)
+            post_date = _parse_post_date(post)
+            posted_at = post_date.strftime("%Y-%m-%d") if post_date else ""
+
+            # Prepend post date to raw_text so the classifier knows when this was posted
+            text_with_date = text
+            if posted_at:
+                text_with_date = f"[LinkedIn post from {posted_at}]\n{text}"
 
             results.append({
                 "company": company,
                 "category": category,
                 "source_url": post_url,
                 "source_type": "linkedin_post",
-                "raw_text": text,
+                "raw_text": text_with_date,
                 "scrape_method": "apify",
                 "scraped_at": posted_at,
             })
             post_count += 1
 
-        print(f"✓ {post_count} posts")
+        status = f"✓ {post_count} posts"
+        if skipped_old:
+            status += f" ({skipped_old} skipped, older than {MAX_POST_AGE_DAYS}d)"
+        print(status)
 
         # Small delay between companies to be respectful
         if i < len(with_linkedin) - 1:

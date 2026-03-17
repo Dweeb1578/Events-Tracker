@@ -45,6 +45,10 @@ EVENT_KEYWORDS = [
 VIRTUAL_ONLY_KEYWORDS = [
     "webinar", "virtual event", "zoom", "online event", "livestream",
     "live stream", "on-demand", "watch now", "tune in",
+    "google meet", "microsoft teams", "webex", "gotomeeting",
+    "gotowebinar", "hopin", "airmeet", "bluejeans",
+    "join online", "remote event", "digital event", "virtual summit",
+    "online workshop", "virtual conference",
 ]
 
 IN_PERSON_KEYWORDS = [
@@ -53,6 +57,20 @@ IN_PERSON_KEYWORDS = [
     "fireside chat", "invite-only", "exclusive", "in-person",
     "venue", "hotel", "convention center",
 ]
+
+# Signals that an extracted event is virtual/online — checked against location,
+# event_type, and event_name after classification to catch anything the LLM missed
+VIRTUAL_SIGNALS = [
+    "virtual", "online", "zoom", "teams", "webinar", "remote",
+    "livestream", "live stream", "on-demand", "digital",
+    "web conference", "google meet", "gotomeeting", "gotowebinar",
+    "hopin", "airmeet", "webex", "bluejeans",
+]
+
+VIRTUAL_EVENT_TYPES = {
+    "webinar", "virtual", "online", "livestream", "live stream",
+    "virtual event", "online event", "digital event",
+}
 
 BATCH_SIZE = 3  # Number of pages per LLM call
 
@@ -73,55 +91,87 @@ def _get_client() -> Groq:
 def _get_system_prompt() -> str:
     """Build system prompt with current date for past-event filtering."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return f"""You are an event detection agent for Zenskar, a B2B billing and revenue recognition platform.
+    return f"""You are an event extraction agent. You analyze scraped web pages and LinkedIn posts to find real, upcoming, IN-PERSON events relevant to B2B finance leaders.
+
 TODAY'S DATE: {today}
 
-Your job is to analyze scraped web page content and:
-1. Determine if it contains information about real IN-PERSON events (summits, dinners, conferences, meetups, roundtables, networking events, happy hours, receptions).
-2. Extract structured details for each event found.
-3. Score each event's relevance to Zenskar's ICP (Ideal Customer Profile).
+━━━ TASK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For each page provided, determine whether it contains information about one or more real in-person events. For each event found, extract structured details and score its relevance.
 
-CRITICAL RULES:
-- Only include UPCOMING or ONGOING events (date >= {today})
-- SKIP any event whose date has already passed
-- IGNORE webinars, virtual events, online events, live streams, and Zoom/Teams calls — we only want IN-PERSON events with a physical location
-- Only extract ACTUAL events with dates, not blog posts, case studies, or product pages
-- If a date is unclear, use the best approximation and note it
-- Do NOT fabricate events that aren't in the content
+━━━ WHAT COUNTS AS AN EVENT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INCLUDE only events that meet ALL of these criteria:
+  1. In-person — held at a named physical venue or city (not virtual, not hybrid-only)
+  2. Upcoming — the event date is on or after {today}
+  3. Real — the event actually exists in the source text (not inferred from ads, CTAs, or generic copy)
+  4. Has a date — a specific date or date range is explicitly stated in the text
 
-ZENSKAR'S ICP - Events are HIGHLY relevant (score 7-10) if they target:
-- CFOs, Controllers, VP/Director/Head of Finance or Accounting
-- FP&A leaders, RevOps, BizOps, Deal Desk professionals
-- Finance teams at B2B SaaS companies (150-2000 employees)
-- Topics: billing, revenue recognition, subscription management, financial operations, SaaS metrics, ARR, pricing strategy
+Event types: Summit, Dinner, Conference, Roundtable, Meetup, Networking, Happy Hour, Workshop, Forum, Panel, Fireside Chat, Other
 
-Events are MODERATELY relevant (score 4-6) if they target:
-- General finance professionals
-- Startup/tech founders discussing financial operations
-- Accounting or tax professionals
+EXCLUDE all of the following:
+  - Webinars, virtual events, online events, livestreams, Zoom/Teams/Meet calls
+  - Hybrid events that do not specify a physical location
+  - Past events (date < {today})
+  - Blog posts, case studies, product pages, press releases, job postings
+  - Recurring generic meetups with no specific upcoming date
+  - Events you are unsure actually exist — when in doubt, leave it out
 
-Events are LOW relevance (score 1-3) if they target:
-- Pure developer/engineering audiences
-- Marketing/sales with no finance angle
-- Consumer/B2C audiences
-- HR, recruiting, or unrelated topics
+━━━ DATE RULES (CRITICAL) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You MUST follow these rules strictly:
+  - Extract dates ONLY from what is explicitly written in the text
+  - NEVER guess, infer, or fabricate a date
+  - If only a month and year are stated (e.g. "June 2026"), use the 1st: "2026-06-01" and set date_source to "partial"
+  - If only a quarter is stated (e.g. "Q3 2026"), use the quarter start date and set date_source to "partial"
+  - If NO date is found in the text at all, set date to "TBD" and date_source to "none"
+  - For LinkedIn posts prefixed with "[LinkedIn post from YYYY-MM-DD]":
+    - Relative phrases like "next week", "this Thursday", "tomorrow" refer to dates relative to the POST date, NOT today
+    - Calculate the actual date from the post date, then check if it is still upcoming (>= {today}). If not, SKIP the event.
+  - date_source values:
+    - "explicit" = exact day/month/year stated (e.g. "March 15, 2026", "2026-03-15", "15th March")
+    - "partial"  = only month/year or quarter stated
+    - "none"     = no date information found in text
 
-You MUST respond with valid JSON in this exact format:
+━━━ RELEVANCE SCORING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Score how relevant the event is for Zenskar, a B2B billing and revenue recognition platform targeting mid-market finance teams.
+
+HIGH (7-10) — Event directly targets our buyers or covers our topics:
+  - Audience: CFOs, Controllers, VP/Director/Head of Finance, Head of Accounting, Head of Billing, Head of Revenue, FP&A leaders, RevOps, BizOps, Deal Desk
+  - Topics: billing automation, revenue recognition, subscription/usage-based pricing, financial operations, SaaS metrics, ARR/MRR, order-to-cash, collections, invoicing
+  - Bonus: B2B SaaS focus, company size 150-2000 employees, US/UK geography
+
+MEDIUM (4-6) — Adjacent audience or tangential topics:
+  - General finance professionals, startup founders discussing finance
+  - Accounting, tax, audit, compliance professionals
+  - Broad fintech or SaaS events with some finance content
+
+LOW (1-3) — Wrong audience or off-topic:
+  - Developer/engineering audiences, marketing/sales with no finance angle
+  - B2C, consumer, HR, recruiting, legal (unless finance-adjacent)
+
+━━━ RESPONSE FORMAT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Respond with valid JSON only. No markdown, no explanation, no commentary.
+
 {{
-  "is_event": true/false,
+  "is_event": true,
   "events": [
     {{
-      "event_name": "string",
-      "host_company": "string",
-      "event_type": "Summit|Dinner|Conference|Roundtable|Meetup|Networking|Happy Hour|Workshop|Other",
-      "date": "YYYY-MM-DD or as found",
-      "location": "City, Venue (MUST be a physical location, not Virtual)",
-      "target_audience": "who it targets",
-      "registration_url": "URL or empty string",
-      "description": "1-2 sentence summary",
-      "relevance_score": 1-10
+      "event_name": "exact name as written in source",
+      "host_company": "company hosting/organizing the event",
+      "event_type": "Summit|Dinner|Conference|Roundtable|Meetup|Networking|Happy Hour|Workshop|Forum|Panel|Fireside Chat|Other",
+      "date": "YYYY-MM-DD or TBD",
+      "date_source": "explicit|partial|none",
+      "location": "City, State/Country — Venue Name",
+      "target_audience": "who the event targets",
+      "registration_url": "full URL if found, otherwise empty string",
+      "description": "1-2 sentence factual summary from the source text",
+      "relevance_score": 1
     }}
   ]
+}}
+
+If NO qualifying events are found, respond:
+{{
+  "is_event": false,
+  "events": []
 }}"""
 
 
@@ -196,10 +246,9 @@ Source URL: {item['source_url']}
 === END PAGE {idx} ===""")
 
     combined = "\n\n".join(parts)
-    return f"""Analyze the following {len(batch)} scraped pages and extract any UPCOMING IN-PERSON events.
-IGNORE webinars, virtual events, and online-only events.
-For each event found, score its relevance to finance leaders (CFOs, Controllers, VP Finance, FP&A).
-Respond ONLY with valid JSON.
+    return f"""Extract upcoming in-person events from the {len(batch)} page(s) below.
+For each event, include a "source_page" integer (1-{len(batch)}) indicating which page it came from.
+Return valid JSON only — no commentary.
 
 {combined}"""
 
@@ -285,6 +334,15 @@ def classify_events(scraped_items: list[dict], min_relevance: int = 5) -> list[d
                 print(f"  📊 Tokens: {usage.prompt_tokens} in / {usage.completion_tokens} out")
 
             result_text = response.choices[0].message.content
+            # Handle truncated JSON (max_tokens hit mid-response)
+            finish_reason = response.choices[0].finish_reason
+            if finish_reason == "length":
+                logger.warning(f"[Classifier] Response truncated in batch {batch_idx+1} — may lose events")
+                # Try to salvage: close any open brackets
+                result_text = result_text.rstrip()
+                if not result_text.endswith("}"):
+                    # Attempt to close the JSON structure
+                    result_text += ']}' if '"events"' in result_text else '}'
             result = json.loads(result_text)
 
             events_list = result.get("events", [])
@@ -293,29 +351,66 @@ def classify_events(scraped_items: list[dict], min_relevance: int = 5) -> list[d
                 events_list = []
 
             for event in events_list:
-                # Filter past events
-                if _is_past_event(event.get("date", "")):
-                    print(f"  ⏭ Past: {event.get('event_name', '?')} ({event.get('date', '')})")
+                # Filter events with no real date (hallucinated or missing)
+                date_str = (event.get("date", "") or "").strip()
+                date_source = (event.get("date_source", "") or "").lower()
+                if date_source == "none" or date_str.upper() in ("TBD", "", "N/A", "UNKNOWN"):
+                    print(f"  ⏭ No date: {event.get('event_name', '?')} (date_source: {date_source})")
+                    event.pop("date_source", None)
                     continue
 
-                # Filter virtual events that slipped through
+                # Strip date_source from output — it's only for filtering
+                event.pop("date_source", None)
+
+                # Filter past events
+                if _is_past_event(date_str):
+                    print(f"  ⏭ Past: {event.get('event_name', '?')} ({date_str})")
+                    continue
+
+                # Filter virtual/online events that slipped through the LLM
                 loc = (event.get("location", "") or "").lower()
                 etype = (event.get("event_type", "") or "").lower()
-                if any(v in loc for v in ["virtual", "online", "zoom", "teams"]) or etype == "webinar":
-                    print(f"  🚫 Virtual: {event.get('event_name', '?')}")
+                ename = (event.get("event_name", "") or "").lower()
+                is_virtual = (
+                    any(v in loc for v in VIRTUAL_SIGNALS)
+                    or etype in VIRTUAL_EVENT_TYPES
+                    or any(v in etype for v in VIRTUAL_SIGNALS)
+                    or any(v in ename for v in ["webinar", "virtual", "online event", "livestream"])
+                    or not loc or loc in ("tbd", "n/a", "not specified", "unknown", "")
+                )
+                if is_virtual:
+                    print(f"  🚫 Virtual/Online: {event.get('event_name', '?')} (location: {loc or 'empty'})")
                     continue
 
                 if event.get("relevance_score", 0) >= min_relevance:
-                    # Map back to source company from batch
+                    # Map back to source company from batch using source_page index
                     if not event.get("source_company"):
-                        host = event.get("host_company", "").lower()
-                        for item in batch:
-                            if item["company"].lower() in host or host in item["company"].lower():
-                                event["source_company"] = item["company"]
-                                event["source_category"] = item["category"]
-                                event["source_url"] = item["source_url"]
-                                break
-                        else:
+                        source_page = event.pop("source_page", None)
+                        matched = False
+                        # Prefer the explicit page index from the LLM
+                        if source_page is not None:
+                            try:
+                                page_idx = int(source_page) - 1
+                                if 0 <= page_idx < len(batch):
+                                    item = batch[page_idx]
+                                    event["source_company"] = item["company"]
+                                    event["source_category"] = item["category"]
+                                    event["source_url"] = item["source_url"]
+                                    matched = True
+                            except (ValueError, TypeError):
+                                pass
+                        # Fallback: fuzzy name matching
+                        if not matched:
+                            host = event.get("host_company", "").lower()
+                            for item in batch:
+                                if item["company"].lower() in host or host in item["company"].lower():
+                                    event["source_company"] = item["company"]
+                                    event["source_category"] = item["category"]
+                                    event["source_url"] = item["source_url"]
+                                    matched = True
+                                    break
+                        # Last resort: first item in batch
+                        if not matched:
                             event["source_company"] = batch[0]["company"]
                             event["source_category"] = batch[0]["category"]
                             event["source_url"] = batch[0]["source_url"]

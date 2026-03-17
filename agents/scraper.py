@@ -72,6 +72,8 @@ def _extract_event_blocks(soup: BeautifulSoup, url: str) -> list[str]:
     """
     _strip_boilerplate(soup)
 
+    is_luma = "luma.com" in url or "lu.ma" in url
+
     # Strategy 1: Look for structured event containers
     event_selectors = [
         "[class*='event']", "[class*='Event']",
@@ -91,7 +93,9 @@ def _extract_event_blocks(soup: BeautifulSoup, url: str) -> list[str]:
                 len(text) > 50
                 and len(text) < 5000
                 and text not in seen_texts
-                and any(kw in text.lower() for kw in EVENT_KEYWORDS)
+                # Luma discover pages list events without typical "register" keywords,
+                # so accept any card-sized block from Luma
+                and (is_luma or any(kw in text.lower() for kw in EVENT_KEYWORDS))
             ):
                 blocks.append(text)
                 seen_texts.add(text)
@@ -99,54 +103,70 @@ def _extract_event_blocks(soup: BeautifulSoup, url: str) -> list[str]:
     # Strategy 2: If no structured blocks found, get the full page text
     if not blocks:
         full_text = soup.get_text(separator=" ", strip=True)
-        if any(kw in full_text.lower() for kw in EVENT_KEYWORDS) and len(full_text) > 100:
+        if len(full_text) > 100 and (
+            is_luma or any(kw in full_text.lower() for kw in EVENT_KEYWORDS)
+        ):
             blocks.append(full_text[:8000])
 
     return blocks
 
 
-def scrape_with_requests(url: str) -> dict | None:
+def scrape_with_requests(url: str, max_retries: int = 2) -> dict | None:
     """Scrape a URL using requests + BeautifulSoup (for static HTML)."""
-    try:
-        response = requests.get(url, headers=_get_headers(), timeout=15)
-        response.raise_for_status()
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=_get_headers(), timeout=15)
+            response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        blocks = _extract_event_blocks(soup, url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            blocks = _extract_event_blocks(soup, url)
 
-        if blocks:
-            return {
-                "raw_text": "\n---\n".join(blocks),
-                "method": "requests",
-                "status": "success",
-            }
-        else:
-            return {
-                "raw_text": "",
-                "method": "requests",
-                "status": "no_events_found",
-            }
+            if blocks:
+                return {
+                    "raw_text": "\n---\n".join(blocks),
+                    "method": "requests",
+                    "status": "success",
+                }
+            else:
+                return {
+                    "raw_text": "",
+                    "method": "requests",
+                    "status": "no_events_found",
+                }
 
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"[Scraper] requests failed for {url}: {e}")
-        return None
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                wait = 3 * (attempt + 1)
+                logger.info(f"[Scraper] Retry {attempt+1} for {url} in {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                logger.warning(f"[Scraper] requests failed for {url} after {max_retries} attempts: {e}")
+                return None
 
 
-def scrape_with_playwright(url: str) -> dict | None:
-    """Scrape a URL using Playwright (for JS-rendered pages like Luma)."""
+def scrape_with_playwright(url: str, browser=None) -> dict | None:
+    """Scrape a URL using Playwright (for JS-rendered pages like Luma).
+    If a browser instance is provided, it will be reused."""
     try:
         from playwright.sync_api import sync_playwright
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+        owns_browser = browser is None
+        pw_context = None
+        if owns_browser:
+            pw_context = sync_playwright().start()
+            browser = pw_context.chromium.launch(headless=True)
+
+        try:
             page = browser.new_page(user_agent=random.choice(USER_AGENTS))
             page.goto(url, wait_until="networkidle", timeout=20000)
-
-            # Wait a bit for dynamic content
             page.wait_for_timeout(2000)
-
             content = page.content()
-            browser.close()
+            page.close()
+        finally:
+            if owns_browser:
+                browser.close()
+                if pw_context:
+                    pw_context.stop()
 
         soup = BeautifulSoup(content, "html.parser")
         blocks = _extract_event_blocks(soup, url)
@@ -169,51 +189,73 @@ def scrape_with_playwright(url: str) -> dict | None:
         return None
 
 
-# Sources that need JS rendering
-JS_RENDERED_SOURCES = {"luma_search"}
+# Sources that need JS rendering (Luma pages are React SPAs)
+JS_RENDERED_SOURCES = {"luma_discover"}
 
 
 def scrape_urls(url_list: list[dict]) -> list[dict]:
     """
     Main scraping function.
     Takes URL list from discovery agent, returns scraped results.
+    Reuses a single Playwright browser instance for all JS-rendered pages.
     """
     results = []
     total = len(url_list)
 
-    for i, item in enumerate(url_list):
-        url = item["url"]
-        company = item["company"]
-        source_type = item["source_type"]
+    # Check if any URL needs Playwright so we can launch once
+    needs_playwright = any(
+        item["source_type"] in JS_RENDERED_SOURCES for item in url_list
+    )
+    pw_context = None
+    browser = None
 
-        print(f"[Scraper] ({i+1}/{total}) Scraping {company} - {source_type}...")
+    if needs_playwright:
+        try:
+            from playwright.sync_api import sync_playwright
+            pw_context = sync_playwright().start()
+            browser = pw_context.chromium.launch(headless=True)
+        except Exception as e:
+            logger.warning(f"[Scraper] Failed to launch Playwright: {e}")
 
-        # Choose scraping method
-        if source_type in JS_RENDERED_SOURCES:
-            result = scrape_with_playwright(url)
-        else:
-            result = scrape_with_requests(url)
-            # Fallback to playwright if requests fails
-            if result is None:
-                result = scrape_with_playwright(url)
+    try:
+        for i, item in enumerate(url_list):
+            url = item["url"]
+            company = item["company"]
+            source_type = item["source_type"]
 
-        if result and result["raw_text"]:
-            results.append({
-                "company": company,
-                "category": item["category"],
-                "source_url": url,
-                "source_type": source_type,
-                "raw_text": result["raw_text"],
-                "scrape_method": result["method"],
-                "scraped_at": datetime.now(timezone.utc).isoformat(),
-            })
-        else:
-            logger.info(f"[Scraper] No event content from {company} - {url}")
+            print(f"[Scraper] ({i+1}/{total}) Scraping {company} - {source_type}...")
 
-        # Random delay between requests (2-5 seconds)
-        if i < total - 1:
-            delay = random.uniform(2.0, 5.0)
-            time.sleep(delay)
+            # Choose scraping method
+            if source_type in JS_RENDERED_SOURCES:
+                result = scrape_with_playwright(url, browser=browser)
+            else:
+                result = scrape_with_requests(url)
+                # Fallback to playwright if requests fails
+                if result is None:
+                    result = scrape_with_playwright(url, browser=browser)
+
+            if result and result["raw_text"]:
+                results.append({
+                    "company": company,
+                    "category": item["category"],
+                    "source_url": url,
+                    "source_type": source_type,
+                    "raw_text": result["raw_text"],
+                    "scrape_method": result["method"],
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                })
+            else:
+                logger.info(f"[Scraper] No event content from {company} - {url}")
+
+            # Random delay between requests (2-5 seconds)
+            if i < total - 1:
+                delay = random.uniform(2.0, 5.0)
+                time.sleep(delay)
+    finally:
+        if browser:
+            browser.close()
+        if pw_context:
+            pw_context.stop()
 
     print(f"[Scraper] Scraped {len(results)} pages with event content out of {total} URLs")
     return results

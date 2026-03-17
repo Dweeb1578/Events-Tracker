@@ -59,6 +59,7 @@ def run_pipeline(
     min_relevance: int = 5,
     use_cache: bool = False,
     skip_linkedin: bool = False,
+    skip_luma: bool = False,
     locations: list[str] | None = None,
     sheet_id: str | None = None,
 ) -> dict:
@@ -95,6 +96,7 @@ def run_pipeline(
     print(f"   Dry run:    {dry_run}")
     print(f"   Cache:      {use_cache}")
     print(f"   LinkedIn:   {'skip' if skip_linkedin else 'enabled'}")
+    print(f"   Luma:       {'skip' if skip_luma else 'enabled'}")
     print(f"   Locations:  {', '.join(locations) if locations else 'all'}")
     print(f"   Sheet ID:   {sheet_id or 'not set (Excel only)'}")
     print("=" * 60)
@@ -103,6 +105,10 @@ def run_pipeline(
     linkedin_scraped = []  # initialized here, populated below if not skip_linkedin
     if use_cache and os.path.exists(SCRAPED_CACHE):
         print("\n📦 Loading cached scraped data...")
+        # Warn if cache is stale (older than 7 days)
+        cache_age_days = (time.time() - os.path.getmtime(SCRAPED_CACHE)) / 86400
+        if cache_age_days > 7:
+            print(f"   ⚠️  Cache is {cache_age_days:.0f} days old — results may be stale")
         with open(SCRAPED_CACHE, "r", encoding="utf-8") as f:
             scraped = json.load(f)
         print(f"   Loaded {len(scraped)} cached pages")
@@ -127,7 +133,7 @@ def run_pipeline(
     else:
         # ── Agent 1: URL Discovery ──
         print("\n📋 STEP 1: Discovering URLs...")
-        kwargs = {}
+        kwargs = {"skip_luma": skip_luma}
         if config_path:
             kwargs["config_path"] = config_path
         urls = discover_urls(**kwargs)
@@ -193,10 +199,10 @@ def run_pipeline(
         print(f"\n🤖 STEP 3b: Classifying {len(linkedin_scraped)} LinkedIn posts with Groq...")
         linkedin_events = classify_events(linkedin_scraped, min_relevance=min_relevance)
 
-    # ── Filter events from search result pages (Eventbrite/Luma search URLs) ──
+    # ── Filter events from search result pages (Eventbrite listing URLs) ──
     def _is_search_result(event: dict) -> bool:
         url = (event.get("source_url") or "").lower()
-        return "eventbrite.com/d/" in url or "lu.ma/search" in url
+        return "eventbrite.com/d/" in url
 
     before = len(events)
     events = [e for e in events if not _is_search_result(e)]
@@ -235,14 +241,22 @@ def run_pipeline(
         print(f"\n📊 STEP 4c: Syncing to Google Sheet ({sheet_id})...")
         try:
             all_events = events + linkedin_events
-            if all_events:
-                write_events_to_sheet(
-                    all_events, sheet_id=sheet_id,
+            spreadsheet = None
+            if events:
+                _, spreadsheet = write_events_to_sheet(
+                    events, sheet_id=sheet_id,
                     worksheet_name="Classified Events", dry_run=dry_run,
                 )
-            # ── Location sheets ──
+            if linkedin_events:
+                _, spreadsheet = write_events_to_sheet(
+                    linkedin_events, sheet_id=sheet_id,
+                    worksheet_name="LinkedIn Events", dry_run=dry_run,
+                    _spreadsheet=spreadsheet,
+                )
+            # ── Location sheets (combine both sources) ──
             print(f"\n📍 Writing location-specific sheets...")
-            write_events_by_location(all_events, sheet_id=sheet_id, dry_run=dry_run)
+            write_events_by_location(all_events, sheet_id=sheet_id, dry_run=dry_run,
+                                     _spreadsheet=spreadsheet)
         except Exception as e:
             logger.error(f"[Sheets] Failed to write to Google Sheet: {e}")
             print(f"  ⚠️  Google Sheets write failed: {e}")
@@ -251,7 +265,7 @@ def run_pipeline(
 
     # ── Summary ──
     elapsed = time.time() - start_time
-    linkedin_count = len(linkedin_scraped) if not use_cache else 0
+    linkedin_count = len(linkedin_scraped)
     summary = {
         "urls": url_count,
         "scraped": len(scraped),

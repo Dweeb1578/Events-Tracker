@@ -73,6 +73,13 @@ EVENT_TYPE_PALETTE = {
 }
 
 
+def _safe_hyperlink(url: str, label: str = "Register →") -> str:
+    """Build a HYPERLINK formula with sanitized URL to prevent formula injection."""
+    # Strip quotes and dangerous characters from URL
+    sanitized = url.replace('"', "%22").replace("'", "%27")
+    return f'=HYPERLINK("{sanitized}", "{label}")'
+
+
 # ── Sheets API helpers ────────────────────────────────────────────────────────
 
 def _rgb(hex_color: str) -> dict:
@@ -353,11 +360,59 @@ def _get_or_create_worksheet(spreadsheet: gspread.Spreadsheet,
 
 def _is_past_event(date_str: str) -> bool:
     today = datetime.now(timezone.utc).date()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+    raw = date_str.strip()
+    if not raw or raw.upper() in ("TBD", "N/A", "UNKNOWN"):
+        return False
+
+    # For date ranges like "March 15-17, 2026" or "2026-03-15 to 2026-03-17",
+    # extract the last date (end of range) to decide if the event has passed
+    # Split on common range separators and try parsing each part
+    parts = re.split(r"\s*(?:to|–|—|-(?=\s))\s*", raw)
+
+    for part in reversed(parts):  # try last part first (end date of range)
+        part = part.strip().rstrip(",.")
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y",
+                    "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+            try:
+                return datetime.strptime(part, fmt).date() < today
+            except ValueError:
+                continue
+
+    # Try to find any year-month-day pattern in the string as a fallback
+    match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", raw)
+    if match:
         try:
-            return datetime.strptime(date_str.strip(), fmt).date() < today
+            from datetime import date
+            d = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            return d < today
         except ValueError:
-            continue
+            pass
+
+    return False
+
+
+def _has_valid_date(date_str: str) -> bool:
+    """Check if a date string is a real, parseable date (not approximate/vague)."""
+    raw = date_str.strip()
+    if not raw or raw.upper() in ("TBD", "N/A", "UNKNOWN"):
+        return False
+    # Must contain at least a year
+    if not re.search(r"\d{4}", raw):
+        return False
+    # Try parsing with known formats
+    parts = re.split(r"\s*(?:to|–|—|-(?=\s))\s*", raw)
+    for part in parts:
+        part = part.strip().rstrip(",.")
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y",
+                    "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+            try:
+                datetime.strptime(part, fmt)
+                return True
+            except ValueError:
+                continue
+    # Regex fallback
+    if re.search(r"\d{4}-\d{1,2}-\d{1,2}", raw):
+        return True
     return False
 
 
@@ -373,11 +428,31 @@ def _remove_past_events(ws: gspread.Worksheet) -> int:
         idx + 2
         for idx, row in enumerate(all_values[1:])
         if len(row) > date_col
-        and (row[date_col] or "").strip()
-        and _is_past_event(row[date_col])
+        and (
+            # Remove past events
+            (_is_past_event(row[date_col]) if (row[date_col] or "").strip() else False)
+            # Remove rows with invalid/approximate dates (TBD, vague, unparseable)
+            or not _has_valid_date(row[date_col])
+        )
     ]
+    if not to_delete:
+        return 0
+
+    # Batch delete: remove rows in descending order using a single batch request
+    # Group consecutive rows into ranges for efficiency
+    reqs = []
     for row_idx in reversed(to_delete):
-        ws.delete_rows(row_idx)
+        reqs.append({
+            "deleteDimension": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "ROWS",
+                    "startIndex": row_idx - 1,  # 0-based
+                    "endIndex": row_idx,
+                }
+            }
+        })
+    ws.spreadsheet.batch_update({"requests": reqs})
     return len(to_delete)
 
 
@@ -388,7 +463,8 @@ def write_events_to_sheet(
     sheet_id: str,
     worksheet_name: str = "Classified Events",
     dry_run: bool = False,
-) -> int:
+    _spreadsheet: gspread.Spreadsheet | None = None,
+) -> tuple[int, gspread.Spreadsheet]:
     """
     Write events to a Google Sheet worksheet with rich formatting.
 
@@ -396,10 +472,13 @@ def write_events_to_sheet(
     - All provided events are appended without deduplication.
     - Sheet formatting (colors, widths, badges) is re-applied after each write.
 
-    Returns the number of events appended.
+    Returns a tuple of (number of events appended, spreadsheet object for reuse).
     """
-    client = _get_client()
-    spreadsheet = client.open_by_key(sheet_id)
+    if _spreadsheet is not None:
+        spreadsheet = _spreadsheet
+    else:
+        client = _get_client()
+        spreadsheet = client.open_by_key(sheet_id)
     ws = _get_or_create_worksheet(spreadsheet, worksheet_name)
 
     # ── Remove past events ────────────────────────────────────────────────────
@@ -415,7 +494,7 @@ def write_events_to_sheet(
         if not dry_run:
             existing_rows = max(0, len(ws.get_all_values()) - 1)
             _apply_formatting(spreadsheet, ws, existing_rows)
-        return 0
+        return 0, spreadsheet
 
     if dry_run:
         for event in events:
@@ -424,26 +503,45 @@ def write_events_to_sheet(
                 f"{event.get('event_name')} | {event.get('location', '?')} | "
                 f"relevance:{event.get('relevance_score', '?')}"
             )
-        return len(events)
+        return len(events), spreadsheet
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     is_linkedin = "linkedin" in worksheet_name.lower()
     status_label = "New (LinkedIn)" if is_linkedin else "New"
 
+    # ── Dedup: build set of existing (event_name, date) pairs ──────────────
+    all_values = ws.get_all_values()
+    headers = all_values[0] if all_values else EVENT_HEADERS
+    name_col = headers.index("Event Name") if "Event Name" in headers else 0
+    date_col_idx = headers.index("Date") if "Date" in headers else DATE_COL
+    existing_keys = set()
+    for row in all_values[1:]:
+        if len(row) > max(name_col, date_col_idx):
+            key = (row[name_col].strip().lower(), row[date_col_idx].strip().lower())
+            existing_keys.add(key)
+
     rows = []
+    skipped_dupes = 0
     for event in events:
+        event_name = event.get("event_name", "")
+        event_date = event.get("date", "")
+        dedup_key = (event_name.strip().lower(), event_date.strip().lower())
+        if dedup_key in existing_keys:
+            skipped_dupes += 1
+            continue
+        existing_keys.add(dedup_key)  # also dedup within the current batch
+
         reg_url = event.get("registration_url", "")
-        # Use HYPERLINK formula so the URL is clickable with a clean label
         reg_cell = (
-            f'=HYPERLINK("{reg_url}", "Register →")' if reg_url and reg_url.startswith("http")
+            _safe_hyperlink(reg_url) if reg_url and reg_url.startswith("http")
             else reg_url
         )
         rows.append([
-            event.get("event_name", ""),
+            event_name,
             event.get("host_company", ""),
             event.get("source_category", ""),
             event.get("event_type", ""),
-            event.get("date", ""),
+            event_date,
             event.get("location", ""),
             event.get("target_audience", ""),
             reg_cell,
@@ -454,8 +552,17 @@ def write_events_to_sheet(
             status_label,
         ])
 
+    if skipped_dupes:
+        print(f"[Sheets] Skipped {skipped_dupes} duplicate events in '{worksheet_name}'")
+
+    if not rows:
+        print(f"[Sheets] No new events to append to '{worksheet_name}'")
+        total_data_rows = max(0, len(all_values) - 1)
+        _apply_formatting(spreadsheet, ws, total_data_rows)
+        return 0, spreadsheet
+
     ws.append_rows(rows, value_input_option="USER_ENTERED")
-    print(f"[Sheets] Appended {len(rows)} events to '{worksheet_name}'")
+    print(f"[Sheets] Appended {len(rows)} new events to '{worksheet_name}'")
 
     # ── Apply formatting ──────────────────────────────────────────────────────
     total_data_rows = len(ws.get_all_values()) - 1  # re-read after append
@@ -463,7 +570,7 @@ def write_events_to_sheet(
     _apply_formatting(spreadsheet, ws, total_data_rows)
     print(f"[Sheets] Formatting applied to '{worksheet_name}'")
 
-    return len(rows)
+    return len(rows), spreadsheet
 
 
 # ── Location-based sheets ─────────────────────────────────────────────────────
@@ -512,6 +619,7 @@ def write_events_by_location(
     events: list[dict],
     sheet_id: str,
     dry_run: bool = False,
+    _spreadsheet: gspread.Spreadsheet | None = None,
 ) -> None:
     """
     Write a separate worksheet tab per city, containing only that city's events.
@@ -537,8 +645,11 @@ def write_events_by_location(
             print(f"  [Sheets][DryRun] Would create sheet '{city}' with {len(evts)} events")
         return
 
-    client = _get_client()
-    spreadsheet = client.open_by_key(sheet_id)
+    if _spreadsheet is not None:
+        spreadsheet = _spreadsheet
+    else:
+        client = _get_client()
+        spreadsheet = client.open_by_key(sheet_id)
     existing = {ws.title: ws for ws in spreadsheet.worksheets()}
 
     # ── Delete stale location sheets ──────────────────────────────────────────
