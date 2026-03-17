@@ -17,8 +17,7 @@ billing:
       - https://recurly.com/events/
     linkedin_url: https://www.linkedin.com/company/recurly/
   - name: Metronome
-    event_urls:
-      - https://metronome.com/events
+    event_urls: []  # metronome.com/events returns 404
     linkedin_url: https://www.linkedin.com/company/getmetronome/
   - name: Orb
     event_urls: []
@@ -74,12 +73,10 @@ erp:
 
 accounts_payable:
   - name: Brex
-    event_urls:
-      - https://www.brex.com/events
+    event_urls: []  # brex.com/events returns 404
     linkedin_url: https://www.linkedin.com/company/brexhq/
   - name: Spendesk
-    event_urls:
-      - https://www.spendesk.com/events/
+    event_urls: []  # spendesk.com/events returns 404
     linkedin_url: https://www.linkedin.com/company/spendesk/
   - name: Ramp
     event_urls:
