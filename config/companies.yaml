@@ -151,10 +151,10 @@ enterprise_competitors:
     linkedin_url: https://www.linkedin.com/company/gotransverse/
   - name: OneBill
     event_urls: []
-    linkedin_url: https://www.linkedin.com/company/onebill-inc-/
+    linkedin_url: https://www.linkedin.com/company/onebill-inc/
   - name: Zone & Co (Zone Billing)
     event_urls: []
-    linkedin_url: https://www.linkedin.com/company/zoneandcompany/
+    linkedin_url: https://www.linkedin.com/company/zoneandco/
 
 # Finance communities that host dinners/roundtables for our ICP
 communities:
