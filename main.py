@@ -94,6 +94,16 @@ def main():
         help="Skip Luma discover page scraping",
     )
     parser.add_argument(
+        "--skip-eventbrite",
+        action="store_true",
+        help="Skip Eventbrite finance/CFO keyword search scraping",
+    )
+    parser.add_argument(
+        "--skip-newsletters",
+        action="store_true",
+        help="Skip newsletter/RSS feed scraping",
+    )
+    parser.add_argument(
         "--location",
         action="append",
         dest="locations",
@@ -109,6 +119,32 @@ def main():
         help=(
             "Google Spreadsheet ID to write events to. "
             "Falls back to GOOGLE_SHEET_ID env var if not set."
+        ),
+    )
+    parser.add_argument(
+        "--extract-engagers",
+        action="store_true",
+        help="Extract people who engaged with event-related LinkedIn posts",
+    )
+    parser.add_argument(
+        "--apollo-limit",
+        type=int,
+        default=100,
+        help="Max Apollo enrichment API calls (default: 100, set 0 to skip)",
+    )
+    parser.add_argument(
+        "--linkedin-max-age-days",
+        type=int,
+        default=None,
+        help="Max age (days) for LinkedIn posts (default: 30). Use 60 for ~2 months.",
+    )
+    parser.add_argument(
+        "--linkedin-posts-per-company",
+        type=int,
+        default=None,
+        help=(
+            "LinkedIn posts to fetch per company (default: 5). "
+            "Must be high enough to cover --linkedin-max-age-days; e.g. ~20 for a 60-day window."
         ),
     )
 
@@ -130,8 +166,14 @@ def main():
             use_cache=args.use_cache,
             skip_linkedin=args.skip_linkedin,
             skip_luma=args.skip_luma,
+            skip_eventbrite=args.skip_eventbrite,
+            skip_newsletters=args.skip_newsletters,
             locations=args.locations or [],
             sheet_id=args.sheet_id,
+            extract_engagers=args.extract_engagers,
+            apollo_limit=args.apollo_limit,
+            linkedin_max_age_days=args.linkedin_max_age_days,
+            linkedin_posts_per_company=args.linkedin_posts_per_company,
         )
 
     if args.schedule:

@@ -144,11 +144,11 @@ def scrape_with_requests(url: str, max_retries: int = 2) -> dict | None:
                 return None
 
 
-def scrape_with_playwright(url: str, browser=None) -> dict | None:
+def scrape_with_playwright(url: str, browser=None, timeout_ms: int = 30000) -> dict | None:
     """Scrape a URL using Playwright (for JS-rendered pages like Luma).
     If a browser instance is provided, it will be reused."""
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 
         owns_browser = browser is None
         pw_context = None
@@ -158,7 +158,11 @@ def scrape_with_playwright(url: str, browser=None) -> dict | None:
 
         try:
             page = browser.new_page(user_agent=random.choice(USER_AGENTS))
-            page.goto(url, wait_until="networkidle", timeout=20000)
+            page.set_default_timeout(timeout_ms)
+            try:
+                page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            except PwTimeout:
+                logger.warning(f"[Scraper] Playwright networkidle timeout for {url}, using partial content")
             page.wait_for_timeout(2000)
             content = page.content()
             page.close()

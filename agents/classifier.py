@@ -59,18 +59,31 @@ IN_PERSON_KEYWORDS = [
 ]
 
 # Signals that an extracted event is virtual/online — checked against location,
-# event_type, and event_name after classification to catch anything the LLM missed
+# event_type, event_name, AND description after classification to catch anything
+# the LLM missed.
 VIRTUAL_SIGNALS = [
     "virtual", "online", "zoom", "teams", "webinar", "remote",
     "livestream", "live stream", "on-demand", "digital",
     "web conference", "google meet", "gotomeeting", "gotowebinar",
     "hopin", "airmeet", "webex", "bluejeans",
+    "join online", "watch live", "register for free", "tune in",
+    "stream live", "broadcast", "hybrid event", "hybrid format",
 ]
 
 VIRTUAL_EVENT_TYPES = {
     "webinar", "virtual", "online", "livestream", "live stream",
-    "virtual event", "online event", "digital event",
+    "virtual event", "online event", "digital event", "hybrid",
 }
+
+# Strong phrases that indicate a description is talking about an online event.
+# These are lower-bar than VIRTUAL_SIGNALS — used only against description text
+# where false positives are less harmful (description is freeform).
+VIRTUAL_DESCRIPTION_PHRASES = [
+    "join us online", "join us on zoom", "join us virtually",
+    "online conference", "online summit", "online roundtable",
+    "from anywhere", "wherever you are", "no travel required",
+    "register to attend virtually", "streaming platform",
+]
 
 BATCH_SIZE = 3  # Number of pages per LLM call
 
@@ -100,20 +113,23 @@ For each page provided, determine whether it contains information about one or m
 
 ━━━ WHAT COUNTS AS AN EVENT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INCLUDE only events that meet ALL of these criteria:
-  1. In-person — held at a named physical venue or city (not virtual, not hybrid-only)
+  1. STRICTLY in-person — held at a named physical venue (hotel, restaurant, conference center, office, named city + venue). MUST have a concrete physical address or named venue. A bare city name with NO venue is INSUFFICIENT unless the surrounding text clearly describes an in-person gathering.
   2. Upcoming — the event date is on or after {today}
   3. Real — the event actually exists in the source text (not inferred from ads, CTAs, or generic copy)
   4. Has a date — a specific date or date range is explicitly stated in the text
 
 Event types: Summit, Dinner, Conference, Roundtable, Meetup, Networking, Happy Hour, Workshop, Forum, Panel, Fireside Chat, Other
 
-EXCLUDE all of the following:
+EXCLUDE all of the following — when in doubt, EXCLUDE:
   - Webinars, virtual events, online events, livestreams, Zoom/Teams/Meet calls
-  - Hybrid events that do not specify a physical location
+  - HYBRID events of any kind (in-person + virtual). If the text mentions both physical and online attendance, EXCLUDE.
+  - Events whose location is "Online", "Virtual", "Anywhere", "Worldwide", "Global", or similar non-physical descriptor
+  - Events that say "join from anywhere", "watch live", "register for free", "stream live"
+  - Events that mention a streaming platform, broadcast, or "tune in"
   - Past events (date < {today})
   - Blog posts, case studies, product pages, press releases, job postings
   - Recurring generic meetups with no specific upcoming date
-  - Events you are unsure actually exist — when in doubt, leave it out
+  - Events where you cannot identify a specific physical venue or city — when in doubt, leave it out
 
 ━━━ DATE RULES (CRITICAL) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 You MUST follow these rules strictly:
@@ -367,16 +383,18 @@ def classify_events(scraped_items: list[dict], min_relevance: int = 5) -> list[d
                     print(f"  ⏭ Past: {event.get('event_name', '?')} ({date_str})")
                     continue
 
-                # Filter virtual/online events that slipped through the LLM
+                # Filter virtual/online/hybrid events that slipped through the LLM
                 loc = (event.get("location", "") or "").lower()
                 etype = (event.get("event_type", "") or "").lower()
                 ename = (event.get("event_name", "") or "").lower()
+                desc = (event.get("description", "") or "").lower()
                 is_virtual = (
                     any(v in loc for v in VIRTUAL_SIGNALS)
                     or etype in VIRTUAL_EVENT_TYPES
                     or any(v in etype for v in VIRTUAL_SIGNALS)
-                    or any(v in ename for v in ["webinar", "virtual", "online event", "livestream"])
-                    or not loc or loc in ("tbd", "n/a", "not specified", "unknown", "")
+                    or any(v in ename for v in ["webinar", "virtual", "online event", "livestream", "hybrid"])
+                    or any(v in desc for v in VIRTUAL_DESCRIPTION_PHRASES)
+                    or not loc or loc in ("tbd", "n/a", "not specified", "unknown", "online", "virtual", "remote")
                 )
                 if is_virtual:
                     print(f"  🚫 Virtual/Online: {event.get('event_name', '?')} (location: {loc or 'empty'})")

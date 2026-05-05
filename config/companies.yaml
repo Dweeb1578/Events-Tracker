@@ -130,3 +130,56 @@ tax:
   - name: Sphere
     event_urls: []
     linkedin_url: https://www.linkedin.com/company/getsphere/
+
+# Finance communities that host dinners/roundtables for our ICP
+communities:
+  - name: Operators Guild
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/the-operators-guild/
+  - name: Finance Alliance
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/finance-alliance/
+  - name: CFO Leadership Council
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/cfo-leadership-council/
+
+# Public Lu.ma / Partiful calendars run by finance communities.
+# NOTE: slugs below are best guesses — verify in a browser before relying on them.
+# Replace any 404 URLs with the real calendar slug from the community's site.
+event_calendars:
+  - name: Operators Guild (Lu.ma)
+    event_urls:
+      - https://lu.ma/operatorsguild
+    linkedin_url: ""
+  - name: CFO Connect / Pavilion (Lu.ma)
+    event_urls:
+      - https://lu.ma/cfoconnect
+    linkedin_url: ""
+  - name: Pavilion (Lu.ma)
+    event_urls:
+      - https://lu.ma/pavilion
+    linkedin_url: ""
+
+# Industry / professional-association conference pages — yearly summits and CPE events
+# relevant to CFO / Controller / VP Finance ICP. Classifier filters non-relevant items.
+conferences:
+  - name: AICPA-CIMA
+    event_urls:
+      - https://www.aicpa-cima.com/cpe-conferences
+    linkedin_url: ""
+  - name: Argyle Forum (CFO)
+    event_urls:
+      - https://www.argyleforum.com/events/
+    linkedin_url: ""
+  - name: CFO Leadership Council (Events)
+    event_urls:
+      - https://cfolc.com/events/
+    linkedin_url: ""
+  - name: The CFO Alliance
+    event_urls:
+      - https://thecfoalliance.org/events/
+    linkedin_url: ""
+  - name: IMA (Institute of Management Accountants)
+    event_urls:
+      - https://www.imanet.org/events
+    linkedin_url: ""

@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 from agents.discovery import discover_urls, load_companies
 from agents.scraper import scrape_urls
 from agents.classifier import classify_events
-from agents.excel_writer import write_events, write_scraped_data, write_linkedin_events
-from agents.sheets_writer import write_events_to_sheet, write_events_by_location
+from agents.excel_writer import write_events, write_scraped_data, write_linkedin_events, write_engagers
+from agents.sheets_writer import write_events_to_sheet, write_events_by_location, write_engagers_to_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,14 @@ def run_pipeline(
     use_cache: bool = False,
     skip_linkedin: bool = False,
     skip_luma: bool = False,
+    skip_eventbrite: bool = False,
+    skip_newsletters: bool = False,
     locations: list[str] | None = None,
     sheet_id: str | None = None,
+    extract_engagers: bool = False,
+    apollo_limit: int = 100,
+    linkedin_max_age_days: int | None = None,
+    linkedin_posts_per_company: int | None = None,
 ) -> dict:
     """
     Run the full event detection pipeline.
@@ -76,6 +82,8 @@ def run_pipeline(
         skip_linkedin: If True, skip LinkedIn scraping via Apify
         locations: If set, only include events whose location matches one of these strings
         sheet_id: Google Spreadsheet ID to write events to (uses GOOGLE_SHEET_ID env var if None)
+        extract_engagers: If True, extract people who engaged with event posts
+        apollo_limit: Max Apollo enrichment API calls (0 to skip enrichment)
 
     Returns:
         Summary dict with stats
@@ -97,6 +105,8 @@ def run_pipeline(
     print(f"   Cache:      {use_cache}")
     print(f"   LinkedIn:   {'skip' if skip_linkedin else 'enabled'}")
     print(f"   Luma:       {'skip' if skip_luma else 'enabled'}")
+    print(f"   Eventbrite: {'skip' if skip_eventbrite else 'enabled'}")
+    print(f"   Newsletters:{'skip' if skip_newsletters else ' enabled'}")
     print(f"   Locations:  {', '.join(locations) if locations else 'all'}")
     print(f"   Sheet ID:   {sheet_id or 'not set (Excel only)'}")
     print("=" * 60)
@@ -125,7 +135,12 @@ def run_pipeline(
                     for c in companies if c.get("linkedin_url")
                 ]
                 if linkedin_companies:
-                    linkedin_scraped = scrape_linkedin_posts(linkedin_companies)
+                    li_kwargs = {}
+                    if linkedin_posts_per_company is not None:
+                        li_kwargs["max_posts_per_company"] = linkedin_posts_per_company
+                    if linkedin_max_age_days is not None:
+                        li_kwargs["max_age_days"] = linkedin_max_age_days
+                    linkedin_scraped = scrape_linkedin_posts(linkedin_companies, **li_kwargs)
                     if linkedin_scraped:
                         print(f"   📎 Got {len(linkedin_scraped)} LinkedIn posts")
             except Exception as e:
@@ -133,7 +148,7 @@ def run_pipeline(
     else:
         # ── Agent 1: URL Discovery ──
         print("\n📋 STEP 1: Discovering URLs...")
-        kwargs = {"skip_luma": skip_luma}
+        kwargs = {"skip_luma": skip_luma, "skip_eventbrite": skip_eventbrite}
         if config_path:
             kwargs["config_path"] = config_path
         urls = discover_urls(**kwargs)
@@ -165,11 +180,28 @@ def run_pipeline(
                 ]
 
                 if linkedin_companies:
-                    linkedin_scraped = scrape_linkedin_posts(linkedin_companies)
+                    li_kwargs = {}
+                    if linkedin_posts_per_company is not None:
+                        li_kwargs["max_posts_per_company"] = linkedin_posts_per_company
+                    if linkedin_max_age_days is not None:
+                        li_kwargs["max_age_days"] = linkedin_max_age_days
+                    linkedin_scraped = scrape_linkedin_posts(linkedin_companies, **li_kwargs)
                     if linkedin_scraped:
                         print(f"   📎 Got {len(linkedin_scraped)} LinkedIn posts (separate sheet)")
             except Exception as e:
                 print(f"   ⚠️ LinkedIn scraping skipped: {e}")
+
+        # ── Agent 2c: Newsletter / RSS scraping ──
+        if not skip_newsletters:
+            try:
+                from agents.newsletter_scraper import scrape_newsletters
+
+                newsletter_items = scrape_newsletters()
+                if newsletter_items:
+                    scraped.extend(newsletter_items)
+                    print(f"   📰 Added {len(newsletter_items)} newsletter items to scraped pool")
+            except Exception as e:
+                print(f"   ⚠️ Newsletter scraping skipped: {e}")
 
         if not scraped and not linkedin_scraped:
             print("⚠️  No event content found from any source")
@@ -200,9 +232,14 @@ def run_pipeline(
         linkedin_events = classify_events(linkedin_scraped, min_relevance=min_relevance)
 
     # ── Filter events from search result pages (Eventbrite listing URLs) ──
+    # Drop only when the listing yielded no concrete event details — if the
+    # classifier extracted a real event_name, keep it even if the source_url
+    # is a search-listing page.
     def _is_search_result(event: dict) -> bool:
         url = (event.get("source_url") or "").lower()
-        return "eventbrite.com/d/" in url
+        is_listing = "eventbrite.com/d/" in url
+        has_concrete_event = bool((event.get("event_name") or "").strip())
+        return is_listing and not has_concrete_event
 
     before = len(events)
     events = [e for e in events if not _is_search_result(e)]
@@ -263,6 +300,83 @@ def run_pipeline(
     else:
         print("\n  (No GOOGLE_SHEET_ID set — skipping Google Sheets sync)")
 
+    # ── Step 5: Engager Extraction (optional) ──
+    engager_count = 0
+    if extract_engagers:
+        print("\n" + "=" * 60)
+        print("👥 STEP 5: Engager Extraction Pipeline")
+        print("=" * 60)
+
+        try:
+            from agents.linkedin_scraper import scrape_posts_with_comments
+            from agents.engager_extractor import extract_engagers as do_extract_engagers
+            from agents.icp_filter import pre_filter_engagers, score_engager
+            from agents.apollo_enricher import enrich_engagers
+
+            # 5a: Load all sources (companies + communities)
+            print("\n📋 STEP 5a: Loading sources for engager extraction...")
+            all_companies = load_companies(config_path) if config_path else load_companies()
+            engager_sources = [
+                {"company": c["name"], "category": c["category"], "linkedin_url": c["linkedin_url"]}
+                for c in all_companies if c.get("linkedin_url")
+            ]
+            print(f"   {len(engager_sources)} sources with LinkedIn URLs")
+
+            # 5b: Scrape posts with comments
+            print(f"\n🔗 STEP 5b: Scraping LinkedIn posts with comments...")
+            posts_with_comments = scrape_posts_with_comments(engager_sources)
+
+            if posts_with_comments:
+                # 5c: Extract engagers
+                print(f"\n👤 STEP 5c: Extracting engagers from {len(posts_with_comments)} event posts...")
+                raw_engagers = do_extract_engagers(posts_with_comments)
+                print(f"   Found {len(raw_engagers)} unique engagers")
+
+                if raw_engagers:
+                    # 5d: Pre-filter by headline
+                    print(f"\n🎯 STEP 5d: Pre-filtering for ICP match...")
+                    filtered_engagers = pre_filter_engagers(raw_engagers)
+                    print(f"   {len(filtered_engagers)} engagers passed ICP pre-filter")
+
+                    # 5e: Apollo enrichment
+                    if filtered_engagers:
+                        print(f"\n🔍 STEP 5e: Enriching via Apollo (limit: {apollo_limit})...")
+                        enriched_engagers = enrich_engagers(filtered_engagers, limit=apollo_limit)
+
+                        # 5f: Score ICP
+                        print(f"\n📊 STEP 5f: Scoring ICP fit...")
+                        for eng in enriched_engagers:
+                            eng["icp_score"] = score_engager(eng)
+
+                        # Sort by ICP score descending
+                        enriched_engagers.sort(key=lambda e: e.get("icp_score", 0), reverse=True)
+
+                        top_scores = [e["icp_score"] for e in enriched_engagers[:5]]
+                        print(f"   Top 5 ICP scores: {top_scores}")
+
+                        # 5g: Write to Excel + Sheets
+                        print(f"\n📝 STEP 5g: Writing {len(enriched_engagers)} engagers...")
+                        engager_count = write_engagers(
+                            enriched_engagers, output_path=output_path, dry_run=dry_run,
+                        )
+
+                        if sheet_id:
+                            try:
+                                write_engagers_to_sheet(
+                                    enriched_engagers, sheet_id=sheet_id, dry_run=dry_run,
+                                )
+                            except Exception as e:
+                                logger.error(f"[Sheets] Failed to write engagers: {e}")
+                                print(f"  ⚠️  Google Sheets engager write failed: {e}")
+                    else:
+                        print("   No engagers passed ICP pre-filter")
+            else:
+                print("   No event-related posts found with comments")
+
+        except Exception as e:
+            logger.error(f"[Engagers] Pipeline failed: {e}", exc_info=True)
+            print(f"\n  ⚠️  Engager extraction failed: {e}")
+
     # ── Summary ──
     elapsed = time.time() - start_time
     linkedin_count = len(linkedin_scraped)
@@ -272,6 +386,7 @@ def run_pipeline(
         "linkedin_posts": linkedin_count,
         "events": len(events),
         "new_events": new_count,
+        "engagers": engager_count,
         "elapsed_seconds": round(elapsed, 1),
     }
 
@@ -283,6 +398,8 @@ def run_pipeline(
     print(f"   LinkedIn posts:     {summary['linkedin_posts']}")
     print(f"   Events found:       {summary['events']} (in-person only)")
     print(f"   New events added:   {summary['new_events']}")
+    if extract_engagers:
+        print(f"   Engagers found:     {summary['engagers']}")
     print(f"   Time elapsed:       {summary['elapsed_seconds']}s")
     print("=" * 60)
 

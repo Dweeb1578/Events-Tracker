@@ -351,6 +351,123 @@ def write_linkedin_events(events: list[dict], output_path: str = DEFAULT_OUTPUT,
     return new_count
 
 
+# ── Engagers sheet ──
+ENGAGER_COLUMNS = [
+    "Name",
+    "LinkedIn URL",
+    "Title",
+    "Company",
+    "Email",
+    "Company Size",
+    "Industry",
+    "Location",
+    "ICP Score",
+    "Engagement Type",
+    "Comment Text",
+    "Source Post",
+    "Source Company",
+    "Enriched At",
+]
+
+ENGAGER_HEADER_FILL = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
+
+
+def write_engagers(engagers: list[dict], output_path: str = DEFAULT_OUTPUT, dry_run: bool = False) -> int:
+    """
+    Write enriched engagers to the 'Engagers' sheet.
+    Returns number of engagers written.
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if os.path.exists(output_path):
+        wb = load_workbook(output_path)
+    else:
+        wb = Workbook()
+        if "Sheet" in wb.sheetnames:
+            del wb["Sheet"]
+
+    sheet_name = "Engagers"
+    if sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb.create_sheet(sheet_name)
+        _format_sheet(ws, ENGAGER_COLUMNS, ENGAGER_HEADER_FILL)
+        _set_column_widths(ws, {
+            "Name": 22, "LinkedIn URL": 40, "Title": 25,
+            "Company": 22, "Email": 30, "Company Size": 14,
+            "Industry": 20, "Location": 22, "ICP Score": 10,
+            "Engagement Type": 14, "Comment Text": 45,
+            "Source Post": 40, "Source Company": 18, "Enriched At": 20,
+        }, ENGAGER_COLUMNS)
+
+    new_count = 0
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    for engager in engagers:
+        if dry_run:
+            score = engager.get("icp_score", "?")
+            print(f"  [DryRun] Would add engager: {engager.get('name')} "
+                  f"({engager.get('parsed_title', '?')}) [ICP: {score}]")
+            new_count += 1
+            continue
+
+        row_idx = ws.max_row + 1
+        linkedin_url = engager.get("linkedin_url", "")
+        row_data = [
+            engager.get("name", ""),
+            linkedin_url,
+            engager.get("title", "") or engager.get("parsed_title", ""),
+            engager.get("company", "") or engager.get("parsed_company", ""),
+            engager.get("email", ""),
+            engager.get("company_size", ""),
+            engager.get("industry", ""),
+            engager.get("location", ""),
+            engager.get("icp_score", 0),
+            engager.get("engagement_type", ""),
+            engager.get("comment_text", "")[:200],
+            engager.get("source_post_url", ""),
+            engager.get("source_post_company", ""),
+            now,
+        ]
+
+        for col_idx, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.value = value
+            cell.border = THIN_BORDER
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            cell.font = Font(name="Calibri", size=10)
+
+        # Hyperlink for LinkedIn URL
+        if linkedin_url and linkedin_url.startswith("http"):
+            cell = ws.cell(row=row_idx, column=2)
+            cell.hyperlink = linkedin_url
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+
+        # Color code ICP score
+        icp_score = engager.get("icp_score", 0)
+        score_cell = ws.cell(row=row_idx, column=ENGAGER_COLUMNS.index("ICP Score") + 1)
+        if icp_score >= 70:
+            score_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+            score_cell.font = Font(name="Calibri", size=10, color="1E6B22", bold=True)
+        elif icp_score >= 50:
+            score_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+            score_cell.font = Font(name="Calibri", size=10, color="7D5700", bold=True)
+        else:
+            score_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            score_cell.font = Font(name="Calibri", size=10, color="9C0006", bold=True)
+
+        new_count += 1
+
+    if not dry_run and new_count > 0:
+        _format_sheet(ws, ENGAGER_COLUMNS, ENGAGER_HEADER_FILL)
+        wb.save(output_path)
+        print(f"\n[Excel] Saved {new_count} engagers to '{sheet_name}' sheet")
+    elif not dry_run:
+        print(f"\n[Excel] No engagers to add")
+
+    return new_count
+
+
 if __name__ == "__main__":
     test_events = [
         {

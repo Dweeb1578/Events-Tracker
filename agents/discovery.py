@@ -25,6 +25,23 @@ LUMA_CITIES = [
     "seattle",
 ]
 
+# Eventbrite finance/CFO keyword searches in target metros.
+# URL pattern: https://www.eventbrite.com/d/{city-slug}/{query-slug}/
+EVENTBRITE_CITIES = [
+    "ny--new-york",
+    "ca--san-francisco",
+    "ma--boston",
+    "il--chicago",
+    "tx--austin",
+]
+EVENTBRITE_QUERIES = [
+    "cfo-dinner",
+    "finance-roundtable",
+    "controller-summit",
+    "saas-finance",
+    "cfo-summit",
+]
+
 
 def load_companies(config_path: str = CONFIG_PATH) -> list[dict]:
     """Load companies from YAML config, returns flat list of company dicts."""
@@ -72,7 +89,27 @@ def generate_luma_discover_urls() -> list[dict]:
     return urls
 
 
-def discover_urls(config_path: str = CONFIG_PATH, skip_luma: bool = False) -> list[dict]:
+def generate_eventbrite_urls() -> list[dict]:
+    """Generate Eventbrite keyword-search URLs across target metros."""
+    urls = []
+    for city in EVENTBRITE_CITIES:
+        # Display name is the part after the state code, e.g. "ny--new-york" -> "New York"
+        display = city.split("--", 1)[-1].replace("-", " ").title()
+        for q in EVENTBRITE_QUERIES:
+            urls.append({
+                "company": f"Eventbrite ({display})",
+                "category": "eventbrite_search",
+                "url": f"https://www.eventbrite.com/d/{city}/{q}/",
+                "source_type": "eventbrite_search",
+            })
+    return urls
+
+
+def discover_urls(
+    config_path: str = CONFIG_PATH,
+    skip_luma: bool = False,
+    skip_eventbrite: bool = False,
+) -> list[dict]:
     """
     Main discovery function.
     Returns a flat list of { company, category, url, source_type } dicts.
@@ -104,6 +141,13 @@ def discover_urls(config_path: str = CONFIG_PATH, skip_luma: bool = False) -> li
         luma_urls = generate_luma_discover_urls()
         all_urls.extend(luma_urls)
         print(f"[Discovery] Added {len(luma_urls)} Luma discover pages ({', '.join(LUMA_CITIES)})")
+
+    # Eventbrite keyword searches across target metros
+    if not skip_eventbrite:
+        eb_urls = generate_eventbrite_urls()
+        all_urls.extend(eb_urls)
+        print(f"[Discovery] Added {len(eb_urls)} Eventbrite search pages "
+              f"({len(EVENTBRITE_CITIES)} cities × {len(EVENTBRITE_QUERIES)} queries)")
 
     print(f"[Discovery] Found {len(all_urls)} URLs across {len(companies)} companies")
     return all_urls

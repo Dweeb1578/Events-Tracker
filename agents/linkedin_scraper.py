@@ -34,10 +34,20 @@ APIFY_API_BASE = "https://api.apify.com/v2"
 ACTOR_ID = "harvestapi~linkedin-company-posts"
 
 # How many recent posts to grab per company
-POSTS_PER_COMPANY = 5
+POSTS_PER_COMPANY = 10
 
 # Skip posts older than this many days
 MAX_POST_AGE_DAYS = 30
+
+# Keywords that indicate a post is about an in-person event
+ENGAGER_KEYWORDS = [
+    "dinner", "roundtable", "cocktail", "happy hour", "wine",
+    "networking event", "networking dinner", "executive dinner",
+    "cfo dinner", "cfo roundtable", "finance leaders",
+    "invite only", "invite-only", "intimate gathering",
+    "in-person", "join us for", "rsvp", "register now",
+    "nyc", "new york", "san francisco", "sf",
+]
 
 
 def _parse_post_date(post: dict) -> datetime | None:
@@ -110,7 +120,20 @@ def _get_token() -> str:
     return token
 
 
-def _run_actor_for_company(linkedin_url: str, max_posts: int = POSTS_PER_COMPANY) -> list[dict]:
+def _post_matches_event_keywords(text: str, keywords: list[str] | None = None) -> bool:
+    """Check if post text contains any event-related keywords (case-insensitive)."""
+    if not text:
+        return False
+    kws = keywords or ENGAGER_KEYWORDS
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in kws)
+
+
+def _run_actor_for_company(
+    linkedin_url: str,
+    max_posts: int = POSTS_PER_COMPANY,
+    scrape_comments: bool = False,
+) -> list[dict]:
     """
     Run the Apify actor for a single company LinkedIn page.
     Returns list of post dicts from the actor output.
@@ -126,14 +149,15 @@ def _run_actor_for_company(linkedin_url: str, max_posts: int = POSTS_PER_COMPANY
         "targetUrls": [company_url],
         "maxPosts": max_posts,
         "scrapeReactions": False,
-        "scrapeComments": False,
+        "scrapeComments": scrape_comments,
     }
 
     headers = {"Authorization": f"Bearer {token}"}
 
     # Start the actor run (note: actor ID uses ~ not / in API URL)
     url = f"{APIFY_API_BASE}/acts/{ACTOR_ID}/runs"
-    resp = requests.post(url, json=actor_input, headers=headers, timeout=30)
+    post_timeout = 60 if scrape_comments else 30
+    resp = requests.post(url, json=actor_input, headers=headers, timeout=post_timeout)
     resp.raise_for_status()
     run_data = resp.json()["data"]
     run_id = run_data["id"]
@@ -183,7 +207,11 @@ def _extract_posts_from_result(raw_results: list | dict) -> list[dict]:
     return []
 
 
-def scrape_linkedin_posts(companies: list[dict], max_posts_per_company: int = POSTS_PER_COMPANY) -> list[dict]:
+def scrape_linkedin_posts(
+    companies: list[dict],
+    max_posts_per_company: int = POSTS_PER_COMPANY,
+    max_age_days: int = MAX_POST_AGE_DAYS,
+) -> list[dict]:
     """
     Scrape LinkedIn company posts for event announcements.
 
@@ -249,8 +277,8 @@ def scrape_linkedin_posts(companies: list[dict], max_posts_per_company: int = PO
             if not text or len(text.strip()) < 20:
                 continue
 
-            # Skip posts older than MAX_POST_AGE_DAYS
-            if _is_post_too_old(post):
+            # Skip posts older than max_age_days
+            if _is_post_too_old(post, max_age_days=max_age_days):
                 skipped_old += 1
                 continue
 
@@ -278,7 +306,7 @@ def scrape_linkedin_posts(companies: list[dict], max_posts_per_company: int = PO
 
         status = f"✓ {post_count} posts"
         if skipped_old:
-            status += f" ({skipped_old} skipped, older than {MAX_POST_AGE_DAYS}d)"
+            status += f" ({skipped_old} skipped, older than {max_age_days}d)"
         print(status)
 
         # Small delay between companies to be respectful
@@ -290,6 +318,115 @@ def scrape_linkedin_posts(companies: list[dict], max_posts_per_company: int = PO
         print(f"  [LinkedIn] Errors: {errors} companies failed")
 
     return results
+
+
+def scrape_posts_with_comments(
+    sources: list[dict],
+    max_posts_per_source: int = POSTS_PER_COMPANY,
+    keywords: list[str] | None = None,
+) -> list[dict]:
+    """
+    Scrape LinkedIn posts WITH comment data for engager extraction.
+
+    Two-phase approach:
+    1. Scrape posts with scrapeComments=True
+    2. Return only posts matching event keywords, with full comment arrays
+
+    Args:
+        sources: List of dicts with 'company', 'category', 'linkedin_url'
+        max_posts_per_source: Posts to grab per company/community
+        keywords: Event keywords to filter by (uses ENGAGER_KEYWORDS if None)
+
+    Returns:
+        List of dicts, each containing:
+            - "comments": raw comment array from Apify
+            - "source_post_url": LinkedIn post URL
+            - "source_post_company": company name
+            - "source_post_preview": first 100 chars of post text
+            - "post_text": full post text
+    """
+    if not sources:
+        return []
+
+    with_linkedin = [s for s in sources if s.get("linkedin_url")]
+    if not with_linkedin:
+        print("[Engagers] No sources have LinkedIn URLs configured")
+        return []
+
+    print(f"\n👥 Scraping LinkedIn posts (with comments) from {len(with_linkedin)} sources...")
+    print(f"   ({max_posts_per_source} posts per source, comments enabled)")
+
+    all_matching_posts = []
+    errors = 0
+
+    for i, source_info in enumerate(with_linkedin):
+        company = source_info["company"]
+        category = source_info.get("category", "unknown")
+        linkedin_url = source_info["linkedin_url"]
+
+        print(f"  ({i+1}/{len(with_linkedin)}) {company}...", end=" ", flush=True)
+
+        try:
+            raw_results = _run_actor_for_company(
+                linkedin_url,
+                max_posts=max_posts_per_source,
+                scrape_comments=True,
+            )
+        except ValueError as e:
+            print(f"\n  ⚠️ {e}")
+            return all_matching_posts
+        except requests.exceptions.HTTPError as e:
+            if "402" in str(e) or "Payment" in str(e):
+                print(f"💰 Credits exhausted, stopping")
+                break
+            print(f"✗ HTTP error: {e}")
+            errors += 1
+            continue
+        except Exception as e:
+            print(f"✗ Error: {e}")
+            errors += 1
+            continue
+
+        posts = _extract_posts_from_result(raw_results)
+        matched = 0
+
+        for post in posts:
+            text = post.get("content", "") or post.get("text", "") or post.get("postText", "") or ""
+            if not text or len(text.strip()) < 20:
+                continue
+
+            if _is_post_too_old(post):
+                continue
+
+            # Only keep posts that match event keywords
+            if not _post_matches_event_keywords(text, keywords):
+                continue
+
+            comments = post.get("comments", [])
+            post_url = post.get("linkedinUrl", "") or post.get("url", "") or post.get("postUrl", "") or ""
+
+            all_matching_posts.append({
+                "comments": comments if isinstance(comments, list) else [],
+                "source_post_url": post_url,
+                "source_post_company": company,
+                "source_post_category": category,
+                "source_post_preview": text[:100].strip(),
+                "post_text": text,
+            })
+            matched += 1
+
+        comment_count = sum(len(p.get("comments", [])) for p in all_matching_posts[-matched:]) if matched else 0
+        print(f"✓ {matched} event posts ({comment_count} comments)")
+
+        # Longer delay than normal scraping — comments cost more and Apify rate-limits
+        if i < len(with_linkedin) - 1:
+            time.sleep(5)
+
+    total_comments = sum(len(p.get("comments", [])) for p in all_matching_posts)
+    print(f"\n  [Engagers] Total: {len(all_matching_posts)} event posts, "
+          f"{total_comments} comments from {len(with_linkedin) - errors} sources")
+
+    return all_matching_posts
 
 
 if __name__ == "__main__":

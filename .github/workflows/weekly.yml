@@ -8,7 +8,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
@@ -34,7 +34,7 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
         run: |
           mkdir -p logs output
-          python main.py
+          python main.py --skip-luma --linkedin-posts-per-company 10
 
       - name: Upload logs
         if: always()
@@ -42,4 +42,12 @@ jobs:
         with:
           name: pipeline-logs-${{ github.run_number }}
           path: logs/pipeline.log
+          retention-days: 30
+
+      - name: Upload Excel output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: events-${{ github.run_number }}
+          path: output/events_*.xlsx
           retention-days: 30

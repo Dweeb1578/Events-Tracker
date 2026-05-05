@@ -573,10 +573,259 @@ def write_events_to_sheet(
     return len(rows), spreadsheet
 
 
+# ── Engagers sheet ───────────────────────────────────────────────────────────
+
+ENGAGER_HEADERS = [
+    "Name",           # A
+    "LinkedIn URL",   # B
+    "Title",          # C
+    "Company",        # D
+    "Email",          # E
+    "Company Size",   # F
+    "Industry",       # G
+    "Location",       # H
+    "ICP Score",      # I
+    "Engagement Type", # J
+    "Comment Text",   # K
+    "Source Post",    # L
+    "Source Company", # M
+    "Enriched At",    # N
+]
+
+ENGAGER_COL_WIDTHS = [180, 200, 180, 180, 220, 100, 150, 170, 80, 110, 250, 200, 140, 140]
+ENGAGER_NUM_COLS = len(ENGAGER_HEADERS)
+ENGAGER_SCORE_COL = ENGAGER_HEADERS.index("ICP Score")
+
+# ICP score thresholds for engagers
+ENGAGER_SCORE_HIGH = dict(bg="C6EFCE", fg="1E6B22")  # green >= 70
+ENGAGER_SCORE_MED  = dict(bg="FFEB9C", fg="7D5700")  # amber 50-69
+ENGAGER_SCORE_LOW  = dict(bg="FFC7CE", fg="9C0006")  # red   < 50
+
+
+def _apply_engager_formatting(spreadsheet: gspread.Spreadsheet,
+                               ws: gspread.Worksheet,
+                               total_rows: int) -> None:
+    """Apply formatting to the Engagers sheet."""
+    sid = ws.id
+    end_row = 1 + total_rows
+    reqs = []
+
+    # Column widths
+    for col, px in enumerate(ENGAGER_COL_WIDTHS[:ENGAGER_NUM_COLS]):
+        reqs.append(_col_width(sid, col, px))
+
+    # Row heights
+    reqs.append(_row_height(sid, 0, 1, 44))
+    if total_rows > 0:
+        reqs.append(_row_height(sid, 1, end_row, 65))
+
+    # Header style (green)
+    reqs.append(_repeat_cell(
+        sid, 0, 1, 0, ENGAGER_NUM_COLS,
+        {
+            "backgroundColor": _rgb("2E7D32"),
+            "textFormat": {
+                "bold": True, "fontSize": 11,
+                "foregroundColor": _rgb("FFFFFF"),
+            },
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        },
+        "backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy",
+    ))
+
+    # Freeze header + auto-filter
+    reqs.append({
+        "updateSheetProperties": {
+            "properties": {
+                "sheetId": sid,
+                "gridProperties": {"frozenRowCount": 1},
+            },
+            "fields": "gridProperties.frozenRowCount",
+        }
+    })
+    reqs.append({
+        "setBasicFilter": {
+            "filter": {
+                "range": {
+                    "sheetId": sid,
+                    "startRowIndex": 0, "endRowIndex": max(end_row, 2),
+                    "startColumnIndex": 0, "endColumnIndex": ENGAGER_NUM_COLS,
+                }
+            }
+        }
+    })
+
+    if total_rows > 0:
+        # Base data cell style
+        thin = {"style": "SOLID", "width": 1, "color": _rgb(BORDER_CLR)}
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, 0, ENGAGER_NUM_COLS,
+            {
+                "textFormat": {"fontSize": 10},
+                "verticalAlignment": "TOP",
+                "wrapStrategy": "WRAP",
+                "borders": {"top": thin, "bottom": thin, "left": thin, "right": thin},
+            },
+            "textFormat,verticalAlignment,wrapStrategy,borders",
+        ))
+
+        # White base background
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, 0, ENGAGER_NUM_COLS,
+            {"backgroundColor": _rgb("FFFFFF")},
+            "backgroundColor",
+        ))
+
+        # Alternating rows
+        reqs.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sid,
+                        "startRowIndex": 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": ENGAGER_NUM_COLS,
+                    }],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "CUSTOM_FORMULA",
+                            "values": [{"userEnteredValue": "=ISEVEN(ROW())"}],
+                        },
+                        "format": {"backgroundColor": _rgb("E8F5E9")},
+                    },
+                },
+                "index": 0,
+            }
+        })
+
+        # ICP score badges
+        score_letter = chr(ord("A") + ENGAGER_SCORE_COL)
+        for rule_idx, (formula, colors) in enumerate([
+            (f"=${score_letter}2>=70", ENGAGER_SCORE_HIGH),
+            (f"=${score_letter}2>=50", ENGAGER_SCORE_MED),
+            (f"=${score_letter}2<50",  ENGAGER_SCORE_LOW),
+        ], start=1):
+            reqs.append(_cond_rule(
+                sid, 1, ENGAGER_SCORE_COL, ENGAGER_SCORE_COL + 1,
+                {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": formula}]},
+                colors["bg"], colors["fg"], rule_idx,
+            ))
+
+        # Name column: bold
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, 0, 1,
+            {"textFormat": {"bold": True, "fontSize": 10}},
+            "textFormat",
+        ))
+
+        # ICP Score: bold + centered
+        reqs.append(_repeat_cell(
+            sid, 1, end_row, ENGAGER_SCORE_COL, ENGAGER_SCORE_COL + 1,
+            {"textFormat": {"bold": True, "fontSize": 11},
+             "horizontalAlignment": "CENTER"},
+            "textFormat,horizontalAlignment",
+        ))
+
+    spreadsheet.batch_update({"requests": reqs})
+
+
+def _get_or_create_engager_worksheet(
+    spreadsheet: gspread.Spreadsheet,
+    name: str,
+) -> gspread.Worksheet:
+    """Get or create a worksheet with engager headers."""
+    try:
+        return spreadsheet.worksheet(name)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=name, rows=2000, cols=ENGAGER_NUM_COLS)
+        ws.append_row(ENGAGER_HEADERS)
+        return ws
+
+
+def write_engagers_to_sheet(
+    engagers: list[dict],
+    sheet_id: str,
+    worksheet_name: str = "Engagers",
+    dry_run: bool = False,
+    _spreadsheet: gspread.Spreadsheet | None = None,
+) -> tuple[int, gspread.Spreadsheet]:
+    """
+    Write enriched engagers to a Google Sheet worksheet.
+    Clears and rewrites the sheet on each run (engagers change between runs).
+
+    Returns (count_written, spreadsheet_object).
+    """
+    if _spreadsheet is not None:
+        spreadsheet = _spreadsheet
+    else:
+        client = _get_client()
+        spreadsheet = client.open_by_key(sheet_id)
+
+    ws = _get_or_create_engager_worksheet(spreadsheet, worksheet_name)
+
+    if dry_run:
+        for eng in engagers:
+            print(f"  [Sheets][DryRun] Would add engager: {eng.get('name')} "
+                  f"({eng.get('title', eng.get('parsed_title', '?'))}) "
+                  f"[ICP: {eng.get('icp_score', '?')}]")
+        return len(engagers), spreadsheet
+
+    # Clear existing data (keep header)
+    ws.clear()
+    ws.append_row(ENGAGER_HEADERS)
+
+    if not engagers:
+        _apply_engager_formatting(spreadsheet, ws, 0)
+        print(f"[Sheets] No engagers to write to '{worksheet_name}'")
+        return 0, spreadsheet
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    rows = []
+    for eng in engagers:
+        linkedin_url = eng.get("linkedin_url", "")
+        url_cell = (
+            _safe_hyperlink(linkedin_url, "Profile →")
+            if linkedin_url and linkedin_url.startswith("http")
+            else linkedin_url
+        )
+        source_url = eng.get("source_post_url", "")
+        source_cell = (
+            _safe_hyperlink(source_url, "Post →")
+            if source_url and source_url.startswith("http")
+            else source_url
+        )
+        rows.append([
+            eng.get("name", ""),
+            url_cell,
+            eng.get("title", "") or eng.get("parsed_title", ""),
+            eng.get("company", "") or eng.get("parsed_company", ""),
+            eng.get("email", ""),
+            eng.get("company_size", ""),
+            eng.get("industry", ""),
+            eng.get("location", ""),
+            eng.get("icp_score", 0),
+            eng.get("engagement_type", ""),
+            eng.get("comment_text", "")[:200],
+            source_cell,
+            eng.get("source_post_company", ""),
+            now,
+        ])
+
+    ws.append_rows(rows, value_input_option="USER_ENTERED")
+    print(f"[Sheets] Wrote {len(rows)} engagers to '{worksheet_name}'")
+
+    _apply_engager_formatting(spreadsheet, ws, len(rows))
+    print(f"[Sheets] Formatting applied to '{worksheet_name}'")
+
+    return len(rows), spreadsheet
+
+
 # ── Location-based sheets ─────────────────────────────────────────────────────
 
 # Sheets that should never be treated as location sheets
-_SYSTEM_SHEETS = {"Classified Events", "LinkedIn Events", "Scraped Data"}
+_SYSTEM_SHEETS = {"Classified Events", "LinkedIn Events", "Scraped Data", "Engagers"}
 
 _SKIP_LOCATION_TERMS = {
     "not specified", "unknown", "tbd", "n/a", "virtual", "online",
