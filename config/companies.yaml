@@ -131,6 +131,31 @@ tax:
     event_urls: []
     linkedin_url: https://www.linkedin.com/company/getsphere/
 
+# Enterprise-tier billing/RevRec competitors. These vendors target larger deals
+# than our existing competitor list (Maxio, Chargebee, etc.) and tend to sponsor
+# big enterprise conferences (Dreamforce, Oracle AI World, AWS re:Invent, TMT
+# Finance, etc.) that our mid-market competitors skip. Booth presence = buyers
+# in the room. Verify LinkedIn slugs in browser if any 404 in the next run.
+enterprise_competitors:
+  - name: RecVue
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/recvue/
+  - name: BillingPlatform
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/billingplatform/
+  - name: Aria Systems
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/aria-systems/
+  - name: gotransverse
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/gotransverse/
+  - name: OneBill
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/onebill-inc-/
+  - name: Zone & Co (Zone Billing)
+    event_urls: []
+    linkedin_url: https://www.linkedin.com/company/zoneandcompany/
+
 # Finance communities that host dinners/roundtables for our ICP
 communities:
   - name: Operators Guild
