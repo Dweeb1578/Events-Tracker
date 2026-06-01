@@ -16,12 +16,12 @@ def normalize_org(name: str) -> str:
     n = re.sub(r"\(.*?\)", "", name)          # drop parentheticals
     n = n.replace(",", " ")
     n = _SUFFIXES.sub("", n)
-    n = re.sub(r"\s+", " ", n).strip().lower().rstrip(" .")
+    n = re.sub(r"\s+", " ", n).strip().lower().strip(" .")
     return n
 
 
 def load_tracked_orgs(companies: list[dict]) -> set[str]:
-    """Build the normalized set of org names to exclude from companies.yaml records."""
+    """Normalized org-name set to exclude. Pass the flat list from orchestrator.load_companies() (already flattened from companies.yaml)."""
     return {normalize_org(c["name"]) for c in companies if c.get("name")}
 
 
