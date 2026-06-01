@@ -429,6 +429,72 @@ def scrape_posts_with_comments(
     return all_matching_posts
 
 
+# Single no-cookie actor returning BOTH likers and commenters. $1.10/1k.
+ENGAGERS_ACTOR_ID = "scraping_solutions~linkedin-posts-engagers-likers-and-commenters-no-cookies"
+
+
+def _run_engagers_actor(post_urls: list[str], limit: int) -> list:
+    """Call the engagers actor for a batch of post URLs. Returns raw item list."""
+    token = _get_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    actor_input = {"urls": post_urls, "resultsLimit": limit}
+    url = f"{APIFY_API_BASE}/acts/{ENGAGERS_ACTOR_ID}/runs"
+    resp = requests.post(url, json=actor_input, headers=headers, timeout=60)
+    resp.raise_for_status()
+    run_id = resp.json()["data"]["id"]
+
+    status_url = f"{APIFY_API_BASE}/actor-runs/{run_id}"
+    for _ in range(36):
+        time.sleep(5)
+        s = requests.get(status_url, headers=headers, timeout=15).json()["data"]
+        if s["status"] == "SUCCEEDED":
+            break
+        if s["status"] in ("FAILED", "ABORTED", "TIMED-OUT"):
+            logger.warning(f"[Engagers] actor {s['status']}")
+            return []
+    else:
+        logger.warning("[Engagers] actor timed out")
+        return []
+
+    ds = s["defaultDatasetId"]
+    items = requests.get(f"{APIFY_API_BASE}/datasets/{ds}/items", headers=headers, timeout=30)
+    items.raise_for_status()
+    return items.json()
+
+
+def scrape_post_engagers(post_urls: list[str], results_limit: int = 100) -> list[dict]:
+    """
+    Scrape likers + commenters for the given event-post URLs via one actor run.
+    Returns normalized engager dicts (one per raw item; dedup happens later).
+    """
+    if not post_urls:
+        return []
+    try:
+        raw = _run_engagers_actor(post_urls, results_limit)
+    except requests.exceptions.HTTPError as e:
+        if "402" in str(e) or "Payment" in str(e):
+            print("💰 Apify credits exhausted — stopping engager scrape")
+            return []
+        print(f"✗ Engagers actor HTTP error: {e}")
+        return []
+
+    out = []
+    for item in raw:
+        name = (item.get("name") or "").strip()
+        url = (item.get("url_profile") or "").strip()
+        if not name or not url:
+            continue
+        etype = "liker" if str(item.get("type", "")).lower().startswith("lik") else "commenter"
+        out.append({
+            "name": name,
+            "headline": (item.get("subtitle") or "").strip(),
+            "linkedin_url": url,
+            "engagement_type": etype,
+            "source_post_url": (item.get("post_Link") or "").strip(),
+        })
+    return out
+
+
 if __name__ == "__main__":
     # Test with one company
     test = [
