@@ -30,3 +30,17 @@ def test_scrape_post_engagers_skips_blank(monkeypatch):
     fake_items = [{"type": "likers", "url_profile": "", "name": "", "subtitle": "", "post_Link": ""}]
     monkeypatch.setattr(linkedin_scraper, "_run_engagers_actor", lambda urls, limit: fake_items)
     assert linkedin_scraper.scrape_post_engagers(["x"]) == []
+
+
+def test_scrape_post_engagers_empty_input_returns_empty():
+    assert linkedin_scraper.scrape_post_engagers([]) == []
+
+
+def test_scrape_post_engagers_handles_credit_error(monkeypatch):
+    import requests
+
+    def boom(urls, limit):
+        raise requests.exceptions.HTTPError("402 Payment Required")
+
+    monkeypatch.setattr(linkedin_scraper, "_run_engagers_actor", boom)
+    assert linkedin_scraper.scrape_post_engagers(["x"]) == []

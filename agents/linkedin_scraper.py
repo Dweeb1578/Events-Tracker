@@ -33,6 +33,9 @@ APIFY_API_BASE = "https://api.apify.com/v2"
 # $2 per 1,000 results (cheaper than apimaestro's $5/1K)
 ACTOR_ID = "harvestapi~linkedin-company-posts"
 
+# Single no-cookie actor returning BOTH likers and commenters. $1.10/1k.
+ENGAGERS_ACTOR_ID = "scraping_solutions~linkedin-posts-engagers-likers-and-commenters-no-cookies"
+
 # How many recent posts to grab per company
 POSTS_PER_COMPANY = 10
 
@@ -429,9 +432,6 @@ def scrape_posts_with_comments(
     return all_matching_posts
 
 
-# Single no-cookie actor returning BOTH likers and commenters. $1.10/1k.
-ENGAGERS_ACTOR_ID = "scraping_solutions~linkedin-posts-engagers-likers-and-commenters-no-cookies"
-
 
 def _run_engagers_actor(post_urls: list[str], limit: int) -> list:
     """Call the engagers actor for a batch of post URLs. Returns raw item list."""
@@ -444,10 +444,14 @@ def _run_engagers_actor(post_urls: list[str], limit: int) -> list:
     run_id = resp.json()["data"]["id"]
 
     status_url = f"{APIFY_API_BASE}/actor-runs/{run_id}"
+    dataset_id = None
     for _ in range(36):
         time.sleep(5)
-        s = requests.get(status_url, headers=headers, timeout=15).json()["data"]
+        status_resp = requests.get(status_url, headers=headers, timeout=15)
+        status_resp.raise_for_status()
+        s = status_resp.json()["data"]
         if s["status"] == "SUCCEEDED":
+            dataset_id = s["defaultDatasetId"]
             break
         if s["status"] in ("FAILED", "ABORTED", "TIMED-OUT"):
             logger.warning(f"[Engagers] actor {s['status']}")
@@ -456,8 +460,7 @@ def _run_engagers_actor(post_urls: list[str], limit: int) -> list:
         logger.warning("[Engagers] actor timed out")
         return []
 
-    ds = s["defaultDatasetId"]
-    items = requests.get(f"{APIFY_API_BASE}/datasets/{ds}/items", headers=headers, timeout=30)
+    items = requests.get(f"{APIFY_API_BASE}/datasets/{dataset_id}/items", headers=headers, timeout=30)
     items.raise_for_status()
     return items.json()
 
@@ -475,7 +478,7 @@ def scrape_post_engagers(post_urls: list[str], results_limit: int = 100) -> list
         if "402" in str(e) or "Payment" in str(e):
             print("💰 Apify credits exhausted — stopping engager scrape")
             return []
-        print(f"✗ Engagers actor HTTP error: {e}")
+        logger.warning(f"[Engagers] actor HTTP error: {e}")
         return []
 
     out = []
