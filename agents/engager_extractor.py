@@ -122,18 +122,20 @@ def _extract_commenter(comment: dict, post_info: dict) -> dict | None:
 _STRENGTH = {"liker": 1, "commenter": 2}
 
 
+def _stronger(a: str, b: str) -> str:
+    return a if _STRENGTH.get(a, 0) >= _STRENGTH.get(b, 0) else b
+
+
 def extract_engagers_from_actor(rows: list[dict]) -> list[dict]:
     """
     Normalize + dedup engagers from scrape_post_engagers() output.
     Dedup key: normalized LinkedIn URL, with name|company as a fallback key so a
     person who both liked and commented (different URL forms) merges once.
     Keeps the stronger engagement_type (commenter > liker).
+    When two records merge via the name|company fallback, the first-seen record's linkedin_url is kept.
     """
     by_key: dict[str, dict] = {}
     order: list[str] = []
-
-    def stronger(a: str, b: str) -> str:
-        return a if _STRENGTH.get(a, 0) >= _STRENGTH.get(b, 0) else b
 
     for row in rows:
         name = (row.get("name") or "").strip()
@@ -142,6 +144,7 @@ def extract_engagers_from_actor(rows: list[dict]) -> list[dict]:
         headline = (row.get("headline") or "").strip()
         title, company = _parse_headline(headline)
         url = (row.get("linkedin_url") or "").strip()
+        etype = (row.get("engagement_type", "liker") or "liker").lower()
 
         url_key = url.rstrip("/").lower() if url else ""
         nc_key = f"{name.lower()}|{company.lower()}" if company else ""
@@ -149,7 +152,7 @@ def extract_engagers_from_actor(rows: list[dict]) -> list[dict]:
         existing_key = url_key if url_key in by_key else (nc_key if nc_key in by_key else None)
         if existing_key:
             cur = by_key[existing_key]
-            cur["engagement_type"] = stronger(cur["engagement_type"], row.get("engagement_type", "liker"))
+            cur["engagement_type"] = _stronger(cur["engagement_type"], etype)
             continue
 
         engager = {
@@ -158,7 +161,7 @@ def extract_engagers_from_actor(rows: list[dict]) -> list[dict]:
             "headline": headline,
             "parsed_title": title,
             "parsed_company": company,
-            "engagement_type": row.get("engagement_type", "liker"),
+            "engagement_type": etype,
             "source_post_url": row.get("source_post_url", ""),
         }
         key = url_key or nc_key or f"__noidx_{len(order)}"

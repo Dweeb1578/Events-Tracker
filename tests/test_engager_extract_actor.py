@@ -23,7 +23,7 @@ def test_dedup_by_url_keeps_stronger_engagement():
     assert out[0]["engagement_type"] == "commenter"  # upgraded
 
 
-def test_dedup_by_name_company_when_urls_differ():
+def test_dedup_by_name_company_liker_then_commenter():
     rows = [
         _raw("Jane Doe", "VP Finance at AcmeSaaS", "https://linkedin.com/in/ACoAA1", "liker"),
         _raw("Jane Doe", "VP Finance at AcmeSaaS", "https://linkedin.com/in/jane-doe", "commenter"),
@@ -31,3 +31,15 @@ def test_dedup_by_name_company_when_urls_differ():
     out = extract_engagers_from_actor(rows)
     assert len(out) == 1
     assert out[0]["engagement_type"] == "commenter"
+    assert out[0]["linkedin_url"] == "https://linkedin.com/in/ACoAA1"  # first-seen URL kept
+
+
+def test_dedup_by_name_company_commenter_then_liker():
+    rows = [
+        _raw("Jane Doe", "VP Finance at AcmeSaaS", "https://linkedin.com/in/jane-doe", "commenter"),
+        _raw("Jane Doe", "VP Finance at AcmeSaaS", "https://linkedin.com/in/ACoAA1", "liker"),
+    ]
+    out = extract_engagers_from_actor(rows)
+    assert len(out) == 1
+    assert out[0]["engagement_type"] == "commenter"  # not downgraded
+    assert out[0]["linkedin_url"] == "https://linkedin.com/in/jane-doe"  # first-seen URL kept
