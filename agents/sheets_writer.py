@@ -14,6 +14,7 @@ import re
 from datetime import datetime, timezone
 
 import gspread
+from agents.sheet_safety import escape_formula
 from google.oauth2.service_account import Credentials
 
 logger = logging.getLogger(__name__)
@@ -788,23 +789,23 @@ def write_engagers_to_sheet(
             else source_url
         )
         rows.append([
-            eng.get("name", ""),
+            escape_formula(eng.get("name", "")),
             url_cell,
-            eng.get("title", "") or eng.get("parsed_title", ""),
-            eng.get("company", "") or eng.get("parsed_company", ""),
-            eng.get("email", ""),
-            eng.get("company_size", ""),
-            eng.get("industry", ""),
-            eng.get("location", ""),
+            escape_formula(eng.get("title", "") or eng.get("parsed_title", "")),
+            escape_formula(eng.get("company", "") or eng.get("parsed_company", "")),
+            escape_formula(eng.get("email", "")),
+            escape_formula(eng.get("company_size", "")),
+            escape_formula(eng.get("industry", "")),
+            escape_formula(eng.get("location", "")),
             eng.get("icp_score", 0),
-            eng.get("verdict", ""),
-            eng.get("engagement_type", ""),
-            eng.get("engagement_strength", ""),
-            eng.get("event_date", ""),
-            eng.get("event_city", ""),
-            eng.get("warm_reason", ""),
+            escape_formula(eng.get("verdict", "")),
+            escape_formula(eng.get("engagement_type", "")),
+            escape_formula(eng.get("engagement_strength", "")),
+            escape_formula(eng.get("event_date", "")),
+            escape_formula(eng.get("event_city", "")),
+            escape_formula(eng.get("warm_reason", "")),
             source_cell,
-            eng.get("source_post_company", ""),
+            escape_formula(eng.get("source_post_company", "")),
             now,
         ])
 

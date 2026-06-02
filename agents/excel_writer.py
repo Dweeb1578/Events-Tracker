@@ -9,6 +9,7 @@ import os
 from datetime import datetime, timezone
 
 from openpyxl import Workbook, load_workbook
+from agents.sheet_safety import escape_formula
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -441,7 +442,7 @@ def write_engagers(engagers: list[dict], output_path: str = DEFAULT_OUTPUT, dry_
 
         for col_idx, value in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col_idx)
-            cell.value = value
+            cell.value = escape_formula(value)
             cell.border = THIN_BORDER
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             cell.font = Font(name="Calibri", size=10)
