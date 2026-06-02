@@ -1,0 +1,100 @@
+
+Updated ICP as of March 2026
+
+ICP - Ideal Customer Profile
+ACV: Targeting companies >40,000 USD
+
+Product Fit:
+Any B2B XaaS (X-as-a-Service) company, with a custom sales-led motion.
+X = Software, services, wealth, lending, logistics, data, recruiting, waste management, professional consulting, fleet management, IT services etc
+X can't be equal to physical goods/hardware/inventory/time sheet management
+X = physical goods/hardware + services listed above is IoT and a good target.
+
+Solving for B2B XaaS (X-as-a-Service) company / any b2b services
+
+Geographical Criteria:
+US, UK, Canada
+Cross Border -> India/Israel -> With min 200 employees in the US/UK/Canada
+
+Employee Size Criteria:
+Min Employee Size -> 200
+Max Employee Size -> 1500
+
+Department Criteria:
+Min Senior Finance Title -> 1 (CFO/Head/VP/Director)
+OR
+Min Senior Accounting Title -> 1 (CAO/Head/VP/Director)
+
+Persona's and Relevant Titles
+
+Finance / Accounting:
+- Chief Financial Officer / Chief Accounting Officer
+- SVP/AVP/VP of Finance / SVP/AVP/VP of Accounting
+- Director of Finance/Financial Operations / Director of Accounting
+- Head of Finance/Financial Operations / Head of Accounting
+- Head of Financial Transformation
+- Financial Controller/Controller/Global Controller/VP Controller
+- Head of Billing / Head of Order to Cash
+- Head/Director of Revenue Accounting
+- Senior Finance Manager/Finance Manager/Financial Transformation Manager
+- Senior Revenue Accounting Manager / Rev-accounting manager
+- Senior Billing Manager / Billing Manager
+- Revenue Manager
+- Senior Manager Accounting / Accounting Manager
+
+Business Systems / Rev-Ops:
+- Head of Business Systems / VP Of Revenue Operations
+- Head of Business Applications / Director of Rev-Ops
+- Head of Enterprise Systems / Head of Rev-Ops
+- Head of Business Technology / Senior Rev-ops Manager
+- Senior Manager Business Systems
+- Senior Manager Business Applications
+- Senior Manager of Enterprise Systems
+- Revenue Systems
+
+Business Operations:
+- Chief Operating Officer / COO
+- Director of Business Operations
+- Head of Business Operations
+- Business Operations Manager
+
+Product / Tech / Eng:
+- Chief Technology Officer/CTO / Chief Product Officer/CPO
+- VP of Product/Engineering
+- Head of Product / Head of Engineering
+
+
+--- ARCHIVED ---
+
+Refined ICP as of 3rd March 2025
+Overview - We need to target $50k+ ACV deals to have a higher right to win and to be a profitable motion.
+For $40k+ deals (companies that have $10M+ revenue) our sweet spot is:
+Our right to win is highest when a company has: Complex pricing + looking for billing automation + rev-rec automation
+Inhouse tools, legacy tools: Stripe/Chargebee/Netsuite don't compete in the category as they don't solve this use case. Our main competition here becomes Maxio, Zuora and Ordway only vs 10+ products
+Rev-rec becomes important only when there is at least 1 senior finance person in the team, otherwise the company perhaps doesn't care about rev-rec
+ICP - Ideal Customer Profile
+Employee size: 150-2000 (Maxio and Ordaway operate here)
+Companies based (HQ) out of US, UK, India, Aus
+What do we not cater:
+Pure Services
+Bio pharma
+private equity or
+venture capital or
+investment banking firm or
+nonprofit organisation,
+pure B2C
+government
+Min 1 senior Finance person is in the team: CFO, Controller, VP/Director/Head/Lead/Senior Manager of Finance or Accounting or FP&A or Ops and Finance or COO
+Controller is the head of accounting and their team does rev-rec/rev-accounting
+Nuanced personas in larger companies: deal desk, receivables, accountant, CPA
+Our key buyers are CFO minus 1 = Controller, VP/Director/Head/Lead/Senior Manager of Finance or Accounting or FP&A
+Not all of our target companies might have a CFO because CFOs are hired when the company is in the $10-$50M revenue range and this is a wide range.
+Controllers are hired when the company is between $5-$10M in revenue and is acting CFO until the CFO is hired
+P1 personas:
+CFO
+Bizops, Revops Biz Systems etc. -> people who handle tech stack and data integration
+Additional Points -
+Engineers: while they are not buyers and wouldn't necessarily come on first demos, they become decision makers later in the process when the opportunity progresses to advanced stages. We need to influence them through the Inbound content (webinar, blog, ads etc) and the @pipeteam (multi thread, share value added content, warm connections).
+They can become blockers to the migration process and we need to actively influence them. Many times they don't even come on demos and can yet act as blockers.
+Opportunistically (10% bandwidth), we will also be targeting companies with 1k-10k employees since our product can solve for such complexity and getting 1 such customer ($100k+ ACV) will open the way to get many more.
+Refer there for detailed analysis Link to ICP Refinement: Outbound

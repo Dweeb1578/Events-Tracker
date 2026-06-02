@@ -1,0 +1,6 @@
+slack-bolt==1.21.3
+slack-sdk==3.33.5
+groq==0.15.0
+apify-client==2.5.0
+httpx==0.28.1
+python-dotenv==1.0.1
