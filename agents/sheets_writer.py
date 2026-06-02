@@ -576,23 +576,14 @@ def write_events_to_sheet(
 # ── Engagers sheet ───────────────────────────────────────────────────────────
 
 ENGAGER_HEADERS = [
-    "Name",           # A
-    "LinkedIn URL",   # B
-    "Title",          # C
-    "Company",        # D
-    "Email",          # E
-    "Company Size",   # F
-    "Industry",       # G
-    "Location",       # H
-    "ICP Score",      # I
-    "Engagement Type", # J
-    "Comment Text",   # K
-    "Source Post",    # L
-    "Source Company", # M
-    "Enriched At",    # N
+    "Name", "LinkedIn URL", "Title", "Company", "Email", "Company Size",
+    "Industry", "Location", "ICP Score", "Verdict", "Engagement Type",
+    "Engagement Strength", "Event Date", "Event City", "Warm Reason",
+    "Source Post", "Source Company", "Enriched At",
 ]
 
-ENGAGER_COL_WIDTHS = [180, 200, 180, 180, 220, 100, 150, 170, 80, 110, 250, 200, 140, 140]
+ENGAGER_COL_WIDTHS = [180, 200, 180, 180, 220, 100, 150, 170, 80, 140, 110,
+                      150, 100, 90, 320, 200, 140, 140]
 ENGAGER_NUM_COLS = len(ENGAGER_HEADERS)
 ENGAGER_SCORE_COL = ENGAGER_HEADERS.index("ICP Score")
 
@@ -806,8 +797,12 @@ def write_engagers_to_sheet(
             eng.get("industry", ""),
             eng.get("location", ""),
             eng.get("icp_score", 0),
+            eng.get("verdict", ""),
             eng.get("engagement_type", ""),
-            eng.get("comment_text", "")[:200],
+            eng.get("engagement_strength", ""),
+            eng.get("event_date", ""),
+            eng.get("event_city", ""),
+            eng.get("warm_reason", ""),
             source_cell,
             eng.get("source_post_company", ""),
             now,
