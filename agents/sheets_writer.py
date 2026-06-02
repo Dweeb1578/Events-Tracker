@@ -670,6 +670,12 @@ def _apply_engager_formatting(spreadsheet: gspread.Spreadsheet,
             "backgroundColor",
         ))
 
+    # ── Clear existing conditional format rules ───────────────────────────────
+    n_existing = _get_cond_format_count(spreadsheet, sid)
+    for i in range(n_existing - 1, -1, -1):
+        reqs.append({"deleteConditionalFormatRule": {"sheetId": sid, "index": i}})
+
+    if total_rows > 0:
         # Alternating rows
         reqs.append({
             "addConditionalFormatRule": {

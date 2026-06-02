@@ -15,3 +15,14 @@ def test_leaves_safe_strings_untouched():
 def test_passes_non_strings_through():
     assert escape_formula(86) == 86
     assert escape_formula(None) is None
+
+
+def test_escapes_formula_after_leading_whitespace():
+    for bad in ("\t=cmd", " =1+1", "\r=x", "\n=SUM(1)", "  @x"):
+        out = escape_formula(bad)
+        assert out.startswith("'") and out[1:] == bad
+
+
+def test_leading_whitespace_non_formula_untouched():
+    assert escape_formula("  hello") == "  hello"
+    assert escape_formula("\tJane Doe") == "\tJane Doe"
