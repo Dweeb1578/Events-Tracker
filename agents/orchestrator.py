@@ -16,6 +16,9 @@ from agents.scraper import scrape_urls
 from agents.classifier import classify_events
 from agents.excel_writer import write_events, write_scraped_data, write_linkedin_events, write_engagers
 from agents.sheets_writer import write_events_to_sheet, write_events_by_location, write_engagers_to_sheet
+from agents.linkedin_scraper import scrape_posts_with_comments
+from agents.engager_pipeline import run_engager_pipeline
+from agents.role_filter import load_tracked_orgs
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,41 @@ def _filter_by_location(events: list[dict], locations: list[str]) -> list[dict]:
         else:
             print(f"  [Location filter] Skipped '{event.get('event_name', '?')}' (location: {event.get('location', '?')})")
     return kept
+
+
+def run_engager_stage(engager_sources: list[dict], output_path: str,
+                      sheet_id: str | None, dry_run: bool) -> int:
+    """Find event posts among sources, run the engager pipeline, write results."""
+    # Reuse the comment scraper purely to surface keyword-matched event posts + text.
+    posts_raw = scrape_posts_with_comments(engager_sources)
+    posts = [{
+        "source_post_url": p.get("source_post_url", ""),
+        "source_post_company": p.get("source_post_company", ""),
+        "post_text": p.get("post_text", ""),
+        "category": p.get("source_post_category", ""),
+    } for p in posts_raw if p.get("source_post_url")]
+
+    if not posts:
+        print("   No event posts found for engager extraction")
+        return 0
+
+    tracked = load_tracked_orgs(load_companies())
+    engagers = run_engager_pipeline(posts, tracked_orgs=tracked)
+    if not engagers:
+        print("   No ICP engagers after filtering")
+        return 0
+
+    top = [e.get("icp_score", 0) for e in engagers[:5]]
+    print(f"   Top 5 ICP scores: {top}")
+
+    count = write_engagers(engagers, output_path=output_path, dry_run=dry_run)
+    if sheet_id:
+        try:
+            write_engagers_to_sheet(engagers, sheet_id=sheet_id, dry_run=dry_run)
+        except Exception as e:
+            logger.error(f"[Sheets] Failed to write engagers: {e}")
+            print(f"  ⚠️  Google Sheets engager write failed: {e}")
+    return count
 
 
 def run_pipeline(
@@ -306,73 +344,14 @@ def run_pipeline(
         print("\n" + "=" * 60)
         print("👥 STEP 5: Engager Extraction Pipeline")
         print("=" * 60)
-
         try:
-            from agents.linkedin_scraper import scrape_posts_with_comments
-            from agents.engager_extractor import extract_engagers as do_extract_engagers
-            from agents.icp_filter import pre_filter_engagers, score_engager
-            from agents.apollo_enricher import enrich_engagers
-
-            # 5a: Load all sources (companies + communities)
-            print("\n📋 STEP 5a: Loading sources for engager extraction...")
             all_companies = load_companies(config_path) if config_path else load_companies()
             engager_sources = [
                 {"company": c["name"], "category": c["category"], "linkedin_url": c["linkedin_url"]}
                 for c in all_companies if c.get("linkedin_url")
             ]
-            print(f"   {len(engager_sources)} sources with LinkedIn URLs")
-
-            # 5b: Scrape posts with comments
-            print(f"\n🔗 STEP 5b: Scraping LinkedIn posts with comments...")
-            posts_with_comments = scrape_posts_with_comments(engager_sources)
-
-            if posts_with_comments:
-                # 5c: Extract engagers
-                print(f"\n👤 STEP 5c: Extracting engagers from {len(posts_with_comments)} event posts...")
-                raw_engagers = do_extract_engagers(posts_with_comments)
-                print(f"   Found {len(raw_engagers)} unique engagers")
-
-                if raw_engagers:
-                    # 5d: Pre-filter by headline
-                    print(f"\n🎯 STEP 5d: Pre-filtering for ICP match...")
-                    filtered_engagers = pre_filter_engagers(raw_engagers)
-                    print(f"   {len(filtered_engagers)} engagers passed ICP pre-filter")
-
-                    # 5e: Apollo enrichment
-                    if filtered_engagers:
-                        print(f"\n🔍 STEP 5e: Enriching via Apollo (limit: {apollo_limit})...")
-                        enriched_engagers = enrich_engagers(filtered_engagers, limit=apollo_limit)
-
-                        # 5f: Score ICP
-                        print(f"\n📊 STEP 5f: Scoring ICP fit...")
-                        for eng in enriched_engagers:
-                            eng["icp_score"] = score_engager(eng)
-
-                        # Sort by ICP score descending
-                        enriched_engagers.sort(key=lambda e: e.get("icp_score", 0), reverse=True)
-
-                        top_scores = [e["icp_score"] for e in enriched_engagers[:5]]
-                        print(f"   Top 5 ICP scores: {top_scores}")
-
-                        # 5g: Write to Excel + Sheets
-                        print(f"\n📝 STEP 5g: Writing {len(enriched_engagers)} engagers...")
-                        engager_count = write_engagers(
-                            enriched_engagers, output_path=output_path, dry_run=dry_run,
-                        )
-
-                        if sheet_id:
-                            try:
-                                write_engagers_to_sheet(
-                                    enriched_engagers, sheet_id=sheet_id, dry_run=dry_run,
-                                )
-                            except Exception as e:
-                                logger.error(f"[Sheets] Failed to write engagers: {e}")
-                                print(f"  ⚠️  Google Sheets engager write failed: {e}")
-                    else:
-                        print("   No engagers passed ICP pre-filter")
-            else:
-                print("   No event-related posts found with comments")
-
+            engager_count = run_engager_stage(
+                engager_sources, output_path=output_path, sheet_id=sheet_id, dry_run=dry_run)
         except Exception as e:
             logger.error(f"[Engagers] Pipeline failed: {e}", exc_info=True)
             print(f"\n  ⚠️  Engager extraction failed: {e}")
