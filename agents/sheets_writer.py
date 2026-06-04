@@ -14,6 +14,7 @@ import re
 from datetime import datetime, timezone
 
 import gspread
+from agents.sheet_safety import escape_formula
 from google.oauth2.service_account import Credentials
 
 logger = logging.getLogger(__name__)
@@ -576,23 +577,14 @@ def write_events_to_sheet(
 # ── Engagers sheet ───────────────────────────────────────────────────────────
 
 ENGAGER_HEADERS = [
-    "Name",           # A
-    "LinkedIn URL",   # B
-    "Title",          # C
-    "Company",        # D
-    "Email",          # E
-    "Company Size",   # F
-    "Industry",       # G
-    "Location",       # H
-    "ICP Score",      # I
-    "Engagement Type", # J
-    "Comment Text",   # K
-    "Source Post",    # L
-    "Source Company", # M
-    "Enriched At",    # N
+    "Name", "LinkedIn URL", "Title", "Company", "Email", "Company Size",
+    "Industry", "Location", "ICP Score", "Verdict", "Engagement Type",
+    "Engagement Strength", "Event Date", "Event City", "Warm Reason",
+    "Source Post", "Source Company", "Enriched At",
 ]
 
-ENGAGER_COL_WIDTHS = [180, 200, 180, 180, 220, 100, 150, 170, 80, 110, 250, 200, 140, 140]
+ENGAGER_COL_WIDTHS = [180, 200, 180, 180, 220, 100, 150, 170, 80, 140, 110,
+                      150, 100, 90, 320, 200, 140, 140]
 ENGAGER_NUM_COLS = len(ENGAGER_HEADERS)
 ENGAGER_SCORE_COL = ENGAGER_HEADERS.index("ICP Score")
 
@@ -678,6 +670,12 @@ def _apply_engager_formatting(spreadsheet: gspread.Spreadsheet,
             "backgroundColor",
         ))
 
+    # ── Clear existing conditional format rules ───────────────────────────────
+    n_existing = _get_cond_format_count(spreadsheet, sid)
+    for i in range(n_existing - 1, -1, -1):
+        reqs.append({"deleteConditionalFormatRule": {"sheetId": sid, "index": i}})
+
+    if total_rows > 0:
         # Alternating rows
         reqs.append({
             "addConditionalFormatRule": {
@@ -797,19 +795,23 @@ def write_engagers_to_sheet(
             else source_url
         )
         rows.append([
-            eng.get("name", ""),
+            escape_formula(eng.get("name", "")),
             url_cell,
-            eng.get("title", "") or eng.get("parsed_title", ""),
-            eng.get("company", "") or eng.get("parsed_company", ""),
-            eng.get("email", ""),
-            eng.get("company_size", ""),
-            eng.get("industry", ""),
-            eng.get("location", ""),
+            escape_formula(eng.get("title", "") or eng.get("parsed_title", "")),
+            escape_formula(eng.get("company", "") or eng.get("parsed_company", "")),
+            escape_formula(eng.get("email", "")),
+            escape_formula(eng.get("company_size", "")),
+            escape_formula(eng.get("industry", "")),
+            escape_formula(eng.get("location", "")),
             eng.get("icp_score", 0),
-            eng.get("engagement_type", ""),
-            eng.get("comment_text", "")[:200],
+            escape_formula(eng.get("verdict", "")),
+            escape_formula(eng.get("engagement_type", "")),
+            escape_formula(eng.get("engagement_strength", "")),
+            escape_formula(eng.get("event_date", "")),
+            escape_formula(eng.get("event_city", "")),
+            escape_formula(eng.get("warm_reason", "")),
             source_cell,
-            eng.get("source_post_company", ""),
+            escape_formula(eng.get("source_post_company", "")),
             now,
         ])
 

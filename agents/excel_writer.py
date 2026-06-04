@@ -9,6 +9,7 @@ import os
 from datetime import datetime, timezone
 
 from openpyxl import Workbook, load_workbook
+from agents.sheet_safety import escape_formula
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -362,8 +363,12 @@ ENGAGER_COLUMNS = [
     "Industry",
     "Location",
     "ICP Score",
+    "Verdict",
     "Engagement Type",
-    "Comment Text",
+    "Engagement Strength",
+    "Event Date",
+    "Event City",
+    "Warm Reason",
     "Source Post",
     "Source Company",
     "Enriched At",
@@ -396,7 +401,8 @@ def write_engagers(engagers: list[dict], output_path: str = DEFAULT_OUTPUT, dry_
             "Name": 22, "LinkedIn URL": 40, "Title": 25,
             "Company": 22, "Email": 30, "Company Size": 14,
             "Industry": 20, "Location": 22, "ICP Score": 10,
-            "Engagement Type": 14, "Comment Text": 45,
+            "Verdict": 16, "Engagement Type": 14, "Engagement Strength": 16,
+            "Event Date": 12, "Event City": 10, "Warm Reason": 50,
             "Source Post": 40, "Source Company": 18, "Enriched At": 20,
         }, ENGAGER_COLUMNS)
 
@@ -423,8 +429,12 @@ def write_engagers(engagers: list[dict], output_path: str = DEFAULT_OUTPUT, dry_
             engager.get("industry", ""),
             engager.get("location", ""),
             engager.get("icp_score", 0),
+            engager.get("verdict", ""),
             engager.get("engagement_type", ""),
-            engager.get("comment_text", "")[:200],
+            engager.get("engagement_strength", ""),
+            engager.get("event_date", ""),
+            engager.get("event_city", ""),
+            engager.get("warm_reason", ""),
             engager.get("source_post_url", ""),
             engager.get("source_post_company", ""),
             now,
@@ -432,7 +442,7 @@ def write_engagers(engagers: list[dict], output_path: str = DEFAULT_OUTPUT, dry_
 
         for col_idx, value in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col_idx)
-            cell.value = value
+            cell.value = escape_formula(value)
             cell.border = THIN_BORDER
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             cell.font = Font(name="Calibri", size=10)
